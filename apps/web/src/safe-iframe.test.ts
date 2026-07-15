@@ -1,0 +1,3 @@
+import { describe, expect, it } from "vitest";
+import { readerIframeCsp, readerIframePolicy, sandboxedDocument } from "./safe-iframe.js";
+describe("reader iframe policy", () => { it("denies script, network and sandbox permissions", () => { const document = sandboxedDocument("<p>safe</p>"); expect(readerIframePolicy.sandbox).toBe(""); expect(readerIframePolicy.referrerPolicy).toBe("no-referrer"); expect(readerIframeCsp).toMatch(/default-src 'none'/); expect(readerIframeCsp).toMatch(/img-src 'none'/); expect(readerIframeCsp).toMatch(/script-src 'none'/); expect(document).toMatch(/Content-Security-Policy/); }); });

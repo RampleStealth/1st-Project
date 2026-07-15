@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { connectionHealth, type MailboxSummary } from "./mailbox-health.js";
 import { ThreadList } from "./thread-list.js";
+import { ThreadReader } from "./thread-reader.js";
 import "./styles.css";
 
 const views = [
@@ -33,9 +34,9 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
 }
 
 function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
-  const { view = "inbox" } = useParams();
+  const { view = "inbox", threadId } = useParams();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} /></section><aside className="reader-column" aria-label="Thread reader"><div className="reader-empty"><span aria-hidden="true">⌁</span><h2>Select a conversation</h2><p>Choose a thread from the list to read it.</p></div></aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader"><ThreadReader mailboxId={mailbox.id} threadId={threadId} /></aside></div></main></div>;
 }
 
 function App() {

@@ -9,16 +9,18 @@ import { pool, withTransaction } from "@aio/database";
 import { ensureMailboxSyncState, recordPendingHistory } from "@aio/database/repositories/mailbox-sync";
 import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { authorizationUrl, classifyGmailError, exchangeCode, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, sanitizeGmailProviderError, stopWatch, watchMailbox } from "@aio/gmail";
+import { authorizationUrl, classifyGmailError, exchangeCode, getThreadFull, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox } from "@aio/gmail";
 import { enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import { encryptSecret } from "@aio/security";
 import { gmailNotificationSchema } from "@aio/contracts";
 import { CursorError, decodeThreadCursor, encodeThreadCursor, threadListQuerySchema } from "./mailbox-list.js";
+import { threadReadProviderFailure } from "./thread-read.js";
 
 const config = loadConfig();
 const redis = new Redis(config.REDIS_URL);
 const app = Fastify({ loggerInstance: logger, trustProxy: config.NODE_ENV === "production" });
+const sanitizedThreadCache = new SanitizedThreadCache();
 const pubsubVerifier = new OAuth2Client();
 await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
 await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods: ["GET", "POST", "DELETE"] });
@@ -88,6 +90,33 @@ app.get<{ Params: { mailboxId: string }; Querystring: { view?: string; cursor?: 
   } catch (error) {
     request.log.error({ err: error, mailboxId: mailbox.id }, "thread projection update failed");
     return reply.code(503).send({ code: "projection_temporarily_unavailable", message: "We loaded Gmail but could not prepare this mailbox view. Try again shortly.", retryable: true });
+  }
+});
+
+app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mailboxId/threads/:threadId", async (request, reply) => {
+  const user = await authenticatedUser(request);
+  if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to read your mailbox." });
+  // This lookup proves ownership before credentials are decrypted or Gmail is contacted.
+  const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
+  if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
+  if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before reading this conversation.", retryable: false });
+  try {
+    const providerThread = await getThreadFull(gmailForMailbox(config, mailbox.encrypted_refresh_token), request.params.threadId);
+    const cacheKey = sanitizedThreadCache.key(mailbox.id, providerThread);
+    const cached = sanitizedThreadCache.get(cacheKey);
+    if (cached) return cached;
+    const display = normalizeThreadDisplay(providerThread);
+    sanitizedThreadCache.set(cacheKey, display);
+    return display;
+  } catch (error) {
+    if (isGmailProviderError(error)) {
+      request.log.warn(sanitizeGmailProviderError(error, { operation: "gmail_thread_read", mailboxId: mailbox.id, correlationId: correlationId(request) }), "gmail thread read failed");
+      const failure = threadReadProviderFailure(error);
+      return reply.code(failure.status).send(failure.body);
+    }
+    // MIME rendering errors carry no provider content into logs or responses.
+    request.log.error({ mailboxId: mailbox.id, correlationId: correlationId(request), errorCode: "safe_rendering_failed" }, "safe thread rendering failed");
+    return reply.code(422).send({ code: "safe_rendering_failed", message: "This conversation could not be rendered safely.", retryable: true });
   }
 });
 

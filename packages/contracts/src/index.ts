@@ -55,6 +55,15 @@ export const threadListPageSchema = z.object({
 });
 export type ThreadListPage = z.infer<typeof threadListPageSchema>;
 
+export const threadDisplayMessageSchema = z.object({
+  id: z.string(), from: z.string().nullable(), to: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()),
+  subject: z.string().nullable(), sentAt: z.string().datetime().nullable(), labels: z.array(z.string()),
+  attachments: z.array(z.object({ filename: z.string(), mimeType: z.string(), size: z.number().int().nonnegative().nullable() })),
+  plainText: z.string(), sanitizedHtml: z.string().nullable(), renderingState: z.enum(["ready", "fallback", "failed"])
+});
+export const threadDisplaySchema = z.object({ id: z.string(), messages: z.array(threadDisplayMessageSchema) });
+export type ThreadDisplay = z.infer<typeof threadDisplaySchema>;
+
 export const auditEventSchema = z.object({
   actorType: z.enum(["user", "system"]),
   actorId: z.string().uuid().nullable(),

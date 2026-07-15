@@ -3,6 +3,7 @@ import { CodeChallengeMethod } from "google-auth-library";
 import type { AppConfig } from "@aio/config";
 import { decryptSecret } from "@aio/security";
 import type { MailboxView, SyncErrorCode } from "@aio/contracts";
+export * from "./thread-display.js";
 
 const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
 export class GmailPaginationValidationError extends Error {
@@ -71,6 +72,11 @@ export async function getMessage(gmail: gmail_v1.Gmail, id: string) {
 
 export async function getThread(gmail: gmail_v1.Gmail, id: string) {
   return (await gmail.users.threads.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "To", "Cc", "Subject", "Date"] })).data;
+}
+
+/** Full structured MIME only; never request Gmail's raw message format. */
+export async function getThreadFull(gmail: gmail_v1.Gmail, id: string) {
+  return (await gmail.users.threads.get({ userId: "me", id, format: "full" })).data;
 }
 
 export function threadListLabel(view: MailboxView): string | undefined {

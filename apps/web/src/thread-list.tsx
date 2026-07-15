@@ -1,23 +1,25 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-type ThreadItem = { id: string; subject: string | null; latestSender: string | null; preview: string | null; lastMessageAt: string | null; unreadCount: number; messageCount: number; hasAttachments: boolean | null; hasDraft: boolean; labels: string[]; };
+type ThreadItem = { id: string; providerThreadId: string; subject: string | null; latestSender: string | null; preview: string | null; lastMessageAt: string | null; unreadCount: number; messageCount: number; hasAttachments: boolean | null; hasDraft: boolean; labels: string[]; };
 type Page = { items: ThreadItem[]; nextCursor: string | null; source: "gmail"; fetchedAt: string };
 
 function formatDate(value: string | null) {
   return value ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value)) : "";
 }
 
-function ThreadRow({ thread }: { thread: ThreadItem }) {
+function ThreadRow({ thread, selected, onSelect }: { thread: ThreadItem; selected: boolean; onSelect: () => void }) {
   const className = thread.unreadCount > 0 ? "thread-row thread-row--unread" : "thread-row";
-  return <article className={className} aria-label={`${thread.subject ?? "No subject"} from ${thread.latestSender ?? "unknown sender"}`}>
+  return <button type="button" className={`${className} ${selected ? "thread-row--selected" : ""}`} onClick={onSelect} aria-label={`${thread.subject ?? "No subject"} from ${thread.latestSender ?? "unknown sender"}`}>
     <div className="thread-row__top"><strong>{thread.latestSender ?? "Unknown sender"}</strong><time dateTime={thread.lastMessageAt ?? undefined}>{formatDate(thread.lastMessageAt)}</time></div>
     <div className="thread-row__subject"><span>{thread.subject || "(No subject)"}</span>{thread.hasAttachments === true && <span aria-label="Has attachment">Attachment</span>}</div>
     <p>{thread.preview || "No preview available."}</p>
     {thread.unreadCount > 0 && <span className="unread-count" aria-label={`${thread.unreadCount} unread messages`}>{thread.unreadCount}</span>}
-  </article>;
+  </button>;
 }
 
-export function ThreadList({ mailboxId, view }: { mailboxId: string; view: string }) {
+export function ThreadList({ mailboxId, view, selectedThreadId }: { mailboxId: string; view: string; selectedThreadId?: string }) {
+  const navigate = useNavigate();
   const [page, setPage] = useState<Page | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([]);
@@ -57,5 +59,5 @@ export function ThreadList({ mailboxId, view }: { mailboxId: string; view: strin
   if (loading && !page) return <section className="thread-list-state" aria-live="polite"><div className="thread-skeleton" /><div className="thread-skeleton" /><div className="thread-skeleton" /><span>Loading Gmail threads…</span></section>;
   if (error && !page) return <section className="thread-list-state"><div><h1>We could not load this view</h1><p>{error}</p><button className="button" onClick={() => void load(cursor)} type="button">Try again</button></div></section>;
   if (!page || page.items.length === 0) return <section className="thread-list-state"><div><h1>No threads in {view === "all" ? "All Mail" : view}</h1><p>Gmail returned no conversations for this view.</p></div></section>;
-  return <section className="thread-list" aria-label="Threads"><div className="thread-list__header"><span>{view === "all" ? "All Mail" : view}</span><span>From Gmail</span></div>{error && <div className="thread-list__retry" role="status">{error}<button type="button" onClick={() => void load(cursor)}>Retry</button></div>}<div aria-busy={loading}>{page.items.map((thread) => <ThreadRow key={thread.id} thread={thread} />)}</div><nav className="pagination" aria-label="Thread pagination"><button type="button" onClick={previous} disabled={history.length === 0 || loading}>Previous</button><span aria-live="polite">{loading ? "Loading page…" : "Gmail results"}</span><button type="button" onClick={next} disabled={!page.nextCursor || loading}>Next</button></nav></section>;
+  return <section className="thread-list" aria-label="Threads"><div className="thread-list__header"><span>{view === "all" ? "All Mail" : view}</span><span>From Gmail</span></div>{error && <div className="thread-list__retry" role="status">{error}<button type="button" onClick={() => void load(cursor)}>Retry</button></div>}<div aria-busy={loading}>{page.items.map((thread) => <ThreadRow key={thread.id} thread={thread} selected={thread.providerThreadId === selectedThreadId} onSelect={() => navigate(`/mail/${mailboxId}/${view}/${thread.providerThreadId}`)} />)}</div><nav className="pagination" aria-label="Thread pagination"><button type="button" onClick={previous} disabled={history.length === 0 || loading}>Previous</button><span aria-live="polite">{loading ? "Loading page…" : "Gmail results"}</span><button type="button" onClick={next} disabled={!page.nextCursor || loading}>Next</button></nav></section>;
 }
