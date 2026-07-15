@@ -22,6 +22,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerMailboxLifecycleRoutes } from "./routes/mailbox-lifecycle.js";
 import { registerProviderCommandRoutes } from "./routes/provider-commands.js";
+import { registerMailboxWorkspaceRoutes } from "./routes/mailbox-workspace.js";
 
 const config = loadConfig();
 const redis = new Redis(config.REDIS_URL);
@@ -35,12 +36,7 @@ await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods
 app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
 registerHealthRoutes(app);
 
-app.get("/v1/mailboxes", async (request, reply) => {
-  const user = await authenticatedUser(request, pool);
-  if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to manage your connection." });
-  const result = await pool.query("SELECT m.id,m.email_address,m.status,m.last_synced_at,m.last_sync_error,m.watch_expires_at,m.created_at,COALESCE(p.write_capability,'read_only') AS write_capability FROM mailbox_accounts m LEFT JOIN mailbox_permission_state p ON p.mailbox_account_id=m.id WHERE m.user_id=$1 AND m.status <> 'disconnected' ORDER BY m.created_at DESC", [user.id]);
-  return result.rows;
-});
+registerMailboxWorkspaceRoutes(app,{pool});
 
 app.get<{ Params: { mailboxId: string }; Querystring: { view?: string; cursor?: string; limit?: string } }>("/v1/mailboxes/:mailboxId/threads", async (request, reply) => {
   const user = await authenticatedUser(request, pool);
