@@ -119,6 +119,11 @@ app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mai
     return reply.code(422).send({ code: "safe_rendering_failed", message: "This conversation could not be rendered safely.", retryable: true });
   }
 });
+app.get<{ Params: { mailboxId: string; commandId: string } }>("/v1/mailboxes/:mailboxId/provider-commands/:commandId", async (request, reply) => {
+  const user = await authenticatedUser(request); if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to view command status." });
+  const result = await pool.query("SELECT c.id,c.command_type,c.status,c.attempt_count,c.next_attempt_at,c.failure_code,c.failure_detail,c.created_at,c.updated_at,c.completed_at FROM provider_commands c JOIN mailbox_accounts m ON m.id=c.mailbox_account_id WHERE c.id=$1 AND c.mailbox_account_id=$2 AND m.user_id=$3", [request.params.commandId, request.params.mailboxId, user.id]);
+  if (!result.rowCount) return reply.code(404).send({ code: "provider_command_not_found", message: "Command not found." }); return result.rows[0];
+});
 
 app.post<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId/permissions/write/start", async (request, reply) => {
   const user = await authenticatedUser(request);

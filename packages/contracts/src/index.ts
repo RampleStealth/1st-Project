@@ -4,6 +4,9 @@ export const mailboxStatusSchema = z.enum(["active", "reauthorization_required",
 export type MailboxStatus = z.infer<typeof mailboxStatusSchema>;
 export const mailboxWriteCapabilitySchema = z.enum(["read_only", "upgrade_pending", "write_granted", "upgrade_declined", "upgrade_failed"]);
 export type MailboxWriteCapability = z.infer<typeof mailboxWriteCapabilitySchema>;
+export const providerCommandTypeSchema = z.enum(["archive_thread","mark_thread_unread","create_draft","update_draft","send_draft"]);
+export const providerCommandStatusSchema = z.enum(["pending","running","succeeded","failed","retryable","recovery_required"]);
+export type ProviderCommandType = z.infer<typeof providerCommandTypeSchema>; export type ProviderCommandStatus = z.infer<typeof providerCommandStatusSchema>;
 
 export const gmailNotificationSchema = z.object({
   emailAddress: z.string().email(),

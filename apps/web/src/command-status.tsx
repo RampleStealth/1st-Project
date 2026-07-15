@@ -1,0 +1,2 @@
+export type CommandStatus = "pending"|"running"|"succeeded"|"retryable"|"failed"|"recovery_required";
+export function CommandStatusNotice({ status }: { status: CommandStatus }) { const text: Record<CommandStatus,string> = { pending:"Queued",running:"Working",succeeded:"Completed",retryable:"Will retry",failed:"Could not complete",recovery_required:"Needs your attention" }; return <p className={`command-status command-status--${status}`} role="status">{text[status]}</p>; }
