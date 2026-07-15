@@ -9,6 +9,7 @@
 ## Sync failures
 
 - Inspect the redacted job correlation ID and checkpoint record.
+- After the legacy-watermark reset, `sync_baseline_required` is expected until the worker completes a fresh initial synchronization. Do not restore a historical checkpoint manually.
 - Compare `mailbox_sync_state.applied_history_id` with `pending_history_id`; never manually advance either value.
 - Retry transient provider and network failures with the queue's backoff policy.
 - A Gmail history 404 requires a full metadata resync; it is expected recovery behavior, not data loss.

@@ -15,6 +15,7 @@ This release connects one Gmail account, synchronizes a bounded recent metadata 
 
 ## Sync correctness
 
+- Legacy mailbox watermarks are treated as untrusted. Existing mailbox accounts are reset to pending initial synchronization and must establish a fresh baseline before incremental history processing resumes.
 - Gmail `watch` is a trigger only; it is not the source of truth.
 - The worker records a notification's history ID as pending, then advances its applied history ID only after the exact Gmail history range has been persisted.
 - A mailbox with pending history newer than its applied history remains eligible for another sync pass, including when a competing worker holds the mailbox lease.
