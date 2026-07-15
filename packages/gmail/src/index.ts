@@ -2,7 +2,7 @@ import { google, gmail_v1 } from "googleapis";
 import { CodeChallengeMethod } from "google-auth-library";
 import type { AppConfig } from "@aio/config";
 import { decryptSecret } from "@aio/security";
-import type { SyncErrorCode } from "@aio/contracts";
+import type { MailboxView, SyncErrorCode } from "@aio/contracts";
 
 const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
 
@@ -67,7 +67,43 @@ export async function getMessage(gmail: gmail_v1.Gmail, id: string) {
 }
 
 export async function getThread(gmail: gmail_v1.Gmail, id: string) {
-  return (await gmail.users.threads.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "Subject", "Date"] })).data;
+  return (await gmail.users.threads.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "To", "Cc", "Subject", "Date"] })).data;
+}
+
+export function threadListLabel(view: MailboxView): string | undefined {
+  if (view === "inbox") return "INBOX";
+  if (view === "sent") return "SENT";
+  if (view === "drafts") return "DRAFT";
+  return undefined;
+}
+
+export async function listThreads(gmail: gmail_v1.Gmail, view: MailboxView, pageToken: string | undefined, maxResults: number) {
+  const label = threadListLabel(view);
+  const response = await gmail.users.threads.list({ userId: "me", labelIds: label ? [label] : undefined, pageToken, maxResults, includeSpamTrash: false });
+  return { threadIds: response.data.threads?.flatMap((thread) => thread.id ? [thread.id] : []) ?? [], nextPageToken: response.data.nextPageToken ?? null };
+}
+
+export async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await mapper(items[index]);
+    }
+  }));
+  return results;
+}
+
+export async function hydrateThreadMetadata(gmail: gmail_v1.Gmail, threadIds: string[], concurrency = 5) {
+  const hydrated = await mapWithConcurrency(threadIds, concurrency, async (threadId) => {
+    try { return await getThread(gmail, threadId); }
+    catch (error) {
+      if (classifyGmailError(error, "resource") === "resource_deleted") return undefined;
+      throw error;
+    }
+  });
+  return hydrated.filter((thread): thread is gmail_v1.Schema$Thread => Boolean(thread));
 }
 
 export async function currentHistoryId(gmail: gmail_v1.Gmail): Promise<string> {

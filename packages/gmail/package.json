@@ -4,5 +4,6 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@aio/config": "*", "@aio/contracts": "*", "@aio/security": "*", "googleapis": "^144.0.0" }
+  "scripts": { "test": "tsx --test src/**/*.test.ts" },
+  "dependencies": { "@aio/config": "*", "@aio/contracts": "*", "@aio/security": "*", "googleapis": "^144.0.0", "tsx": "^4.19.3" }
 }

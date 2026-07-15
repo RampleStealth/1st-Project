@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./repositories/mailbox-sync": "./src/repositories/mailbox-sync-repository.ts"
+    "./repositories/mailbox-sync": "./src/repositories/mailbox-sync-repository.ts",
+    "./repositories/thread-projection": "./src/repositories/thread-projection-repository.ts",
+    "./repositories/mailbox-account": "./src/repositories/mailbox-account-repository.ts"
   },
   "scripts": {
     "db:migrate": "tsx src/migrate.ts"

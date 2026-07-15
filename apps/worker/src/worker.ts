@@ -1,10 +1,10 @@
 import { setInterval } from "node:timers";
 import { Worker } from "bullmq";
 import { loadConfig } from "@aio/config";
-import type { PoolClient } from "pg";
 import { findMailboxById, pool, withTransaction } from "@aio/database";
 import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
-import { changedMessageIds, classifyGmailError, currentHistoryId, getMessage, getThread, gmailForMailbox, initialThreadIds, watchMailbox } from "@aio/gmail";
+import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
+import { changedMessageIds, classifyGmailError, currentHistoryId, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
@@ -25,10 +25,6 @@ async function withMailboxLease<T>(mailboxId: string, work: () => Promise<T>): P
   }
 }
 
-function header(message: { payload?: { headers?: Array<{ name?: string | null; value?: string | null }> } }, name: string) {
-  return message.payload?.headers?.find((item) => item.name?.toLowerCase() === name.toLowerCase())?.value ?? null;
-}
-
 async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
@@ -41,34 +37,8 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
   return results;
 }
 
-async function persistThread(client: PoolClient, mailboxId: string, providerThread: Awaited<ReturnType<typeof getThread>>) {
-  if (!providerThread.id) return;
-  const messages = providerThread.messages ?? [];
-  const latest = messages.at(-1);
-  const thread = await client.query<{ id: string }>(
-    `INSERT INTO threads(mailbox_account_id, provider_thread_id, subject_normalized, participant_summary, last_message_at, unread_count, provider_labels)
-     VALUES($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT(mailbox_account_id,provider_thread_id) DO UPDATE SET subject_normalized=EXCLUDED.subject_normalized,participant_summary=EXCLUDED.participant_summary,last_message_at=EXCLUDED.last_message_at,unread_count=EXCLUDED.unread_count,provider_labels=EXCLUDED.provider_labels,sync_version=threads.sync_version+1,updated_at=now()
-     RETURNING id`,
-    [mailboxId, providerThread.id, header(latest ?? {}, "Subject"), header(latest ?? {}, "From"), latest?.internalDate ? new Date(Number(latest.internalDate)) : null, messages.filter((message) => message.labelIds?.includes("UNREAD")).length, [...new Set(messages.flatMap((message) => message.labelIds ?? []))]]
-  );
-  for (const message of messages) {
-    if (!message.id || !message.internalDate) continue;
-    await client.query(
-      `INSERT INTO messages(thread_id,provider_message_id,internal_timestamp,sent_at,from_address,snippet,provider_labels)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT(thread_id,provider_message_id) DO UPDATE SET provider_labels=EXCLUDED.provider_labels`,
-      [thread.rows[0].id, message.id, new Date(Number(message.internalDate)), null, header(message, "From"), null, [...new Set(message.labelIds ?? [])]]
-    );
-  }
-}
-
 async function fetchThreads(gmail: ReturnType<typeof gmailForMailbox>, threadIds: string[]) {
-  const threads = await mapWithConcurrency(threadIds, 5, async (threadId) => {
-    try { return await getThread(gmail, threadId); }
-    catch (error) { if (classifyGmailError(error, "resource") === "resource_deleted") return undefined; throw error; }
-  });
-  return threads.filter((thread): thread is Awaited<ReturnType<typeof getThread>> => Boolean(thread));
+  return hydrateThreadMetadata(gmail, threadIds, 5);
 }
 
 type HistoryBatch = { processedHistoryId: string; deletedMessageIds: string[]; threads: Awaited<ReturnType<typeof getThread>>[] };
@@ -83,12 +53,12 @@ async function collectHistoryChanges(gmail: ReturnType<typeof gmailForMailbox>, 
   return { processedHistoryId: changes.latestHistoryId ?? startHistoryId, deletedMessageIds: changes.deletedMessageIds, threads };
 }
 
-async function persistHistoryBatch(client: PoolClient, mailboxId: string, batch: HistoryBatch) {
+async function persistHistoryBatch(client: Parameters<typeof upsertThreadProjection>[0], mailboxId: string, batch: HistoryBatch) {
   if (batch.deletedMessageIds.length) {
     await client.query("DELETE FROM messages USING threads WHERE messages.thread_id=threads.id AND threads.mailbox_account_id=$1 AND messages.provider_message_id = ANY($2)", [mailboxId, batch.deletedMessageIds]);
     await client.query("DELETE FROM threads WHERE mailbox_account_id=$1 AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.thread_id=threads.id)", [mailboxId]);
   }
-  for (const thread of batch.threads) await persistThread(client, mailboxId, thread);
+  for (const thread of batch.threads) await upsertThreadProjection(client, mailboxId, thread);
 }
 
 async function runInitialSync(mailboxId: string, gmail: ReturnType<typeof gmailForMailbox>, forceNewBaseline: boolean) {
@@ -99,7 +69,7 @@ async function runInitialSync(mailboxId: string, gmail: ReturnType<typeof gmailF
   const initialThreads = await fetchThreads(gmail, await initialThreadIds(gmail, config.GMAIL_INITIAL_SYNC_LIMIT));
   const historyBatch = await collectHistoryChanges(gmail, baseline);
   const applied = await withTransaction(async (client) => {
-    for (const thread of initialThreads) await persistThread(client, mailboxId, thread);
+    for (const thread of initialThreads) await upsertThreadProjection(client, mailboxId, thread);
     await persistHistoryBatch(client, mailboxId, historyBatch);
     return applyProcessedHistory(client, mailboxId, historyBatch.processedHistoryId, config.SYNC_RECONCILIATION_INTERVAL_MINUTES, true);
   });

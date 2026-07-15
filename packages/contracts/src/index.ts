@@ -29,6 +29,32 @@ export const mailboxSyncStateSchema = z.object({
 });
 export type MailboxSyncState = z.infer<typeof mailboxSyncStateSchema>;
 
+export const mailboxViewSchema = z.enum(["inbox", "all", "sent", "drafts"]);
+export type MailboxView = z.infer<typeof mailboxViewSchema>;
+
+export const threadListItemSchema = z.object({
+  id: z.string().uuid(),
+  providerThreadId: z.string().min(1),
+  subject: z.string().nullable(),
+  latestSender: z.string().nullable(),
+  preview: z.string().nullable(),
+  lastMessageAt: z.coerce.date().nullable(),
+  unreadCount: z.number().int().nonnegative(),
+  messageCount: z.number().int().nonnegative(),
+  hasAttachments: z.boolean().nullable(),
+  hasDraft: z.boolean(),
+  labels: z.array(z.string())
+});
+export type ThreadListItem = z.infer<typeof threadListItemSchema>;
+
+export const threadListPageSchema = z.object({
+  items: z.array(threadListItemSchema),
+  nextCursor: z.string().min(1).nullable(),
+  source: z.literal("gmail"),
+  fetchedAt: z.coerce.date()
+});
+export type ThreadListPage = z.infer<typeof threadListPageSchema>;
+
 export const auditEventSchema = z.object({
   actorType: z.enum(["user", "system"]),
   actorId: z.string().uuid().nullable(),

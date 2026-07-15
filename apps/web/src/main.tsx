@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { connectionHealth, type MailboxSummary } from "./mailbox-health.js";
+import { ThreadList } from "./thread-list.js";
 import "./styles.css";
 
 const views = [
@@ -31,15 +32,10 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
   </aside>;
 }
 
-function EmptyPane({ view }: { view: string }) {
-  const label = views.find(([key]) => key === view)?.[1] ?? "Mailbox";
-  return <section className="pane-state" aria-labelledby="view-title"><div><p className="eyebrow">{label}</p><h1 id="view-title">Your mailbox workspace</h1><p>This view is ready. Thread browsing and reading will appear here when mailbox retrieval is enabled.</p></div></section>;
-}
-
 function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   const { view = "inbox" } = useParams();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><div className="mail-layout"><section className="thread-column" aria-label="Thread list"><EmptyPane view={selectedView} /></section><aside className="reader-column" aria-label="Thread reader"><div className="reader-empty"><span aria-hidden="true">⌁</span><h2>Select a conversation</h2><p>Choose a thread from the list to read it.</p></div></aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} /></section><aside className="reader-column" aria-label="Thread reader"><div className="reader-empty"><span aria-hidden="true">⌁</span><h2>Select a conversation</h2><p>Choose a thread from the list to read it.</p></div></aside></div></main></div>;
 }
 
 function App() {
