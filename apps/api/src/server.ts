@@ -8,12 +8,11 @@ import { loadConfig } from "@aio/config";
 import { pool, withTransaction } from "@aio/database";
 import { ensureMailboxSyncState, recordPendingHistory } from "@aio/database/repositories/mailbox-sync";
 import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
-import { authorizationUrl, exchangeCode, exchangeWriteUpgradeCode, getThreadFull, gmailForMailbox, isGmailProviderError, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox, writeUpgradeAuthorizationUrl } from "@aio/gmail";
+import { authorizationUrl, exchangeCode, exchangeWriteUpgradeCode, gmailForMailbox, isGmailProviderError, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox, writeUpgradeAuthorizationUrl } from "@aio/gmail";
 import { enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import { encryptSecret } from "@aio/security";
 import { gmailNotificationSchema } from "@aio/contracts";
-import { threadReadProviderFailure } from "./thread-read.js";
 import { challenge, cookieOptions, correlationId, hash, requireCsrf } from "./route-helpers/security.js";
 import { authenticatedUser } from "./route-helpers/session.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -34,34 +33,7 @@ await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods
 app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
 registerHealthRoutes(app);
 
-registerMailboxWorkspaceRoutes(app,{config,pool,withTransaction});
-
-app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mailboxId/threads/:threadId", async (request, reply) => {
-  const user = await authenticatedUser(request, pool);
-  if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to read your mailbox." });
-  // This lookup proves ownership before credentials are decrypted or Gmail is contacted.
-  const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
-  if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
-  if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before reading this conversation.", retryable: false });
-  try {
-    const providerThread = await getThreadFull(gmailForMailbox(config, mailbox.encrypted_refresh_token), request.params.threadId);
-    const cacheKey = sanitizedThreadCache.key(mailbox.id, providerThread);
-    const cached = sanitizedThreadCache.get(cacheKey);
-    if (cached) return cached;
-    const display = normalizeThreadDisplay(providerThread);
-    sanitizedThreadCache.set(cacheKey, display);
-    return display;
-  } catch (error) {
-    if (isGmailProviderError(error)) {
-      request.log.warn(sanitizeGmailProviderError(error, { operation: "gmail_thread_read", mailboxId: mailbox.id, correlationId: correlationId(request) }), "gmail thread read failed");
-      const failure = threadReadProviderFailure(error);
-      return reply.code(failure.status).send(failure.body);
-    }
-    // MIME rendering errors carry no provider content into logs or responses.
-    request.log.error({ mailboxId: mailbox.id, correlationId: correlationId(request), errorCode: "safe_rendering_failed" }, "safe thread rendering failed");
-    return reply.code(422).send({ code: "safe_rendering_failed", message: "This conversation could not be rendered safely.", retryable: true });
-  }
-});
+registerMailboxWorkspaceRoutes(app,{config,pool,withTransaction,sanitizedThreadCache});
 registerProviderCommandRoutes(app,{pool});
 
 app.post<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId/permissions/write/start", async (request, reply) => {

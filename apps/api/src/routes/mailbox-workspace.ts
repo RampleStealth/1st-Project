@@ -3,19 +3,22 @@ import type { Pool } from "pg";
 import type { AppConfig } from "@aio/config";
 import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { classifyGmailError, gmailForMailbox, hydrateThreadMetadata, listThreads } from "@aio/gmail";
+import { classifyGmailError, getThreadFull, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError } from "@aio/gmail";
 import { CursorError, decodeThreadCursor, encodeThreadCursor, threadListQuerySchema } from "../mailbox-list.js";
+import { threadReadProviderFailure } from "../thread-read.js";
+import { correlationId } from "../route-helpers/security.js";
 import { authenticatedUser } from "../route-helpers/session.js";
 
 type Deps = {
   config: AppConfig;
   pool: Pool;
   withTransaction: <T>(fn: (client: any) => Promise<T>) => Promise<T>;
+  sanitizedThreadCache: SanitizedThreadCache;
 };
 
 export function registerMailboxWorkspaceRoutes(
   app: FastifyInstance<any, any, any, any>,
-  { config, pool, withTransaction }: Deps
+  { config, pool, withTransaction, sanitizedThreadCache }: Deps
 ) {
   app.get("/v1/mailboxes",async(request,reply)=>{const user=await authenticatedUser(request,pool);if(!user)return reply.code(401).send({code:"unauthenticated",message:"Sign in to manage your connection."});const result=await pool.query("SELECT m.id,m.email_address,m.status,m.last_synced_at,m.last_sync_error,m.watch_expires_at,m.created_at,COALESCE(p.write_capability,'read_only') AS write_capability FROM mailbox_accounts m LEFT JOIN mailbox_permission_state p ON p.mailbox_account_id=m.id WHERE m.user_id=$1 AND m.status <> 'disconnected' ORDER BY m.created_at DESC",[user.id]);return result.rows;});
 
@@ -58,6 +61,33 @@ export function registerMailboxWorkspaceRoutes(
     } catch (error) {
       request.log.error({ err: error, mailboxId: mailbox.id }, "thread projection update failed");
       return reply.code(503).send({ code: "projection_temporarily_unavailable", message: "We loaded Gmail but could not prepare this mailbox view. Try again shortly.", retryable: true });
+    }
+  });
+
+  app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mailboxId/threads/:threadId", async (request, reply) => {
+    const user = await authenticatedUser(request, pool);
+    if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to read your mailbox." });
+    // This lookup proves ownership before credentials are decrypted or Gmail is contacted.
+    const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
+    if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
+    if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before reading this conversation.", retryable: false });
+    try {
+      const providerThread = await getThreadFull(gmailForMailbox(config, mailbox.encrypted_refresh_token), request.params.threadId);
+      const cacheKey = sanitizedThreadCache.key(mailbox.id, providerThread);
+      const cached = sanitizedThreadCache.get(cacheKey);
+      if (cached) return cached;
+      const display = normalizeThreadDisplay(providerThread);
+      sanitizedThreadCache.set(cacheKey, display);
+      return display;
+    } catch (error) {
+      if (isGmailProviderError(error)) {
+        request.log.warn(sanitizeGmailProviderError(error, { operation: "gmail_thread_read", mailboxId: mailbox.id, correlationId: correlationId(request) }), "gmail thread read failed");
+        const failure = threadReadProviderFailure(error);
+        return reply.code(failure.status).send(failure.body);
+      }
+      // MIME rendering errors carry no provider content into logs or responses.
+      request.log.error({ mailboxId: mailbox.id, correlationId: correlationId(request), errorCode: "safe_rendering_failed" }, "safe thread rendering failed");
+      return reply.code(422).send({ code: "safe_rendering_failed", message: "This conversation could not be rendered safely.", retryable: true });
     }
   });
 }
