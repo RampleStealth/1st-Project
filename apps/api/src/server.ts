@@ -18,6 +18,7 @@ import { CursorError, decodeThreadCursor, encodeThreadCursor, threadListQuerySch
 import { threadReadProviderFailure } from "./thread-read.js";
 import { challenge, cookieOptions, correlationId, hash, requireCsrf } from "./route-helpers/security.js";
 import { authenticatedUser } from "./route-helpers/session.js";
+import { registerHealthRoutes } from "./routes/health.js";
 
 const config = loadConfig();
 const redis = new Redis(config.REDIS_URL);
@@ -29,7 +30,7 @@ await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods
 
 
 app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
-app.get("/health", async () => ({ status: "ok" }));
+registerHealthRoutes(app);
 
 app.get("/v1/mailboxes", async (request, reply) => {
   const user = await authenticatedUser(request, pool);
