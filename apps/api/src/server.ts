@@ -2,10 +2,11 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
-import IORedis from "ioredis";
+import { Redis } from "ioredis";
 import { OAuth2Client } from "google-auth-library";
 import { loadConfig } from "@aio/config";
 import { pool, withTransaction } from "@aio/database";
+import { ensureMailboxSyncState, recordPendingHistory } from "@aio/database/repositories/mailbox-sync";
 import { authorizationUrl, exchangeCode, gmailForMailbox, stopWatch, watchMailbox } from "@aio/gmail";
 import { enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
@@ -13,7 +14,7 @@ import { encryptSecret } from "@aio/security";
 import { gmailNotificationSchema } from "@aio/contracts";
 
 const config = loadConfig();
-const redis = new IORedis(config.REDIS_URL);
+const redis = new Redis(config.REDIS_URL);
 const app = Fastify({ loggerInstance: logger, trustProxy: config.NODE_ENV === "production" });
 const pubsubVerifier = new OAuth2Client();
 await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
@@ -24,7 +25,7 @@ function challenge(verifier: string) { return createHash("sha256").update(verifi
 function cookieOptions() { return { httpOnly: true, secure: config.NODE_ENV === "production", sameSite: "lax" as const, path: "/", signed: true }; }
 function correlationId(request: FastifyRequest) { return String(request.headers["x-correlation-id"]); }
 async function authenticatedUser(request: FastifyRequest) {
-  const signed = request.unsignCookie(request.cookies.aio_session);
+  const signed = request.unsignCookie(request.cookies.aio_session ?? "");
   if (!signed.valid || !signed.value) return null;
   const result = await pool.query<{ id: string }>("SELECT user_id AS id FROM sessions WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()", [hash(signed.value)]);
   return result.rows[0] ?? null;
@@ -63,7 +64,7 @@ app.post("/v1/auth/logout", async (request, reply) => {
   const user = await authenticatedUser(request);
   if (!user) return reply.code(204).clearCookie("aio_session", cookieOptions()).clearCookie("aio_csrf", { path: "/" }).send();
   if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
-  const signed = request.unsignCookie(request.cookies.aio_session);
+  const signed = request.unsignCookie(request.cookies.aio_session ?? "");
   await pool.query("UPDATE sessions SET revoked_at=now() WHERE token_hash=$1", [hash(signed.value!)]);
   return reply.code(204).clearCookie("aio_session", cookieOptions()).clearCookie("aio_csrf", { path: "/" }).send();
 });
@@ -85,6 +86,8 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
     const { tokens, profile } = await exchangeCode(config, code, verifier);
     if (!profile.emailAddress || !profile.historyId || !tokens.refresh_token) throw new Error("Incomplete Gmail profile");
     const email = profile.emailAddress.toLowerCase();
+    const historyId = profile.historyId;
+    const refreshToken = tokens.refresh_token;
     const sessionToken = randomBytes(48).toString("base64url");
     const expiresAt = new Date(Date.now() + 1_209_600_000);
     const mailbox = await withTransaction(async (client) => {
@@ -94,16 +97,17 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
          VALUES($1, 'gmail', $2, $3, $4, $5, $6)
          ON CONFLICT(provider, provider_account_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, granted_scopes = EXCLUDED.granted_scopes, status = 'active', disconnected_at = NULL
          RETURNING id, encrypted_refresh_token`,
-        [user.rows[0].id, email, email, encryptSecret(tokens.refresh_token, config.TOKEN_ENCRYPTION_KEY_BASE64), tokens.scope?.split(" ") ?? [], profile.historyId]
+        [user.rows[0].id, email, email, encryptSecret(refreshToken, config.TOKEN_ENCRYPTION_KEY_BASE64), tokens.scope?.split(" ") ?? [], historyId]
       );
       await client.query("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES($1, $2, $3)", [user.rows[0].id, hash(sessionToken), expiresAt]);
       await client.query("INSERT INTO audit_events(actor_type, actor_id, event_type, object_type, object_id, correlation_id) VALUES('user',$1,'gmail.connected','mailbox_account',$2,$3)", [user.rows[0].id, account.rows[0].id, correlationId(request)]);
       return account.rows[0];
     });
+    await ensureMailboxSyncState(mailbox.id, historyId);
     let syncDelayed = false;
     try {
       const watch = await watchMailbox(gmailForMailbox(config, mailbox.encrypted_refresh_token), config.GOOGLE_PUBSUB_TOPIC);
-      await pool.query("UPDATE mailbox_accounts SET watch_expires_at=$2, last_history_id=$3,last_sync_error=NULL WHERE id=$1", [mailbox.id, watch.expiration ? new Date(Number(watch.expiration)) : null, watch.historyId ?? profile.historyId]);
+      await pool.query("UPDATE mailbox_accounts SET watch_expires_at=$2, last_history_id=$3,last_sync_error=NULL WHERE id=$1", [mailbox.id, watch.expiration ? new Date(Number(watch.expiration)) : null, watch.historyId ?? historyId]);
     } catch (watchError) {
       syncDelayed = true;
       request.log.warn({ err: watchError, mailboxId: mailbox.id }, "gmail watch setup delayed");
@@ -130,7 +134,10 @@ app.post("/v1/webhooks/gmail", async (request, reply) => {
     if (!body.message?.data) return reply.code(400).send();
     const notification = gmailNotificationSchema.parse(JSON.parse(Buffer.from(body.message.data, "base64url").toString("utf8")));
     const account = await pool.query<{ id: string }>("SELECT id FROM mailbox_accounts WHERE lower(email_address)=lower($1) AND status='active'", [notification.emailAddress]);
-    if (account.rowCount) await enqueueSync({ mailboxAccountId: account.rows[0].id, requestedHistoryId: notification.historyId, reason: "notification" });
+    if (account.rowCount) {
+      await recordPendingHistory(account.rows[0].id, notification.historyId);
+      await enqueueSync({ mailboxAccountId: account.rows[0].id, requestedHistoryId: notification.historyId, reason: "notification" });
+    }
     return reply.code(204).send();
   } catch (cause) { request.log.warn({ err: cause }, "rejected gmail notification"); return reply.code(401).send(); }
 });

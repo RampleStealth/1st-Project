@@ -1,6 +1,8 @@
 import { google, gmail_v1 } from "googleapis";
+import { CodeChallengeMethod } from "google-auth-library";
 import type { AppConfig } from "@aio/config";
 import { decryptSecret } from "@aio/security";
+import type { SyncErrorCode } from "@aio/contracts";
 
 const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
 
@@ -14,7 +16,7 @@ export function authorizationUrl(config: AppConfig, state: string, codeChallenge
     scope: gmailScopes,
     state,
     code_challenge: codeChallenge,
-    code_challenge_method: "S256",
+    code_challenge_method: CodeChallengeMethod.S256,
     prompt: "consent",
     include_granted_scopes: false
   });
@@ -80,4 +82,15 @@ export async function watchMailbox(gmail: gmail_v1.Gmail, topicName: string) {
 
 export async function stopWatch(gmail: gmail_v1.Gmail) {
   await gmail.users.stop({ userId: "me" });
+}
+
+export function classifyGmailError(error: unknown, operation: "history" | "resource" | "token"): SyncErrorCode {
+  if (!error || typeof error !== "object") return "unknown_provider_failure";
+  const value = error as { code?: unknown; response?: { status?: unknown; data?: { error?: string } } };
+  const status = typeof value.code === "number" ? value.code : typeof value.response?.status === "number" ? value.response.status : undefined;
+  if (status === 401 || value.response?.data?.error === "invalid_grant") return "reauthorization_required";
+  if (status === 429) return "rate_limited";
+  if (status === 404) return operation === "history" ? "history_expired" : "resource_deleted";
+  if (status && status >= 500) return "transient_provider_failure";
+  return "unknown_provider_failure";
 }

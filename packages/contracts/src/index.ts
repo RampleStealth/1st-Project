@@ -22,6 +22,7 @@ export const mailboxSyncStateSchema = z.object({
   mailboxAccountId: z.string().uuid(),
   appliedHistoryId: z.string().regex(/^\d+$/).nullable(),
   pendingHistoryId: z.string().regex(/^\d+$/).nullable(),
+  initialBaselineHistoryId: z.string().regex(/^\d+$/).nullable(),
   initialSyncStatus: z.enum(["pending", "running", "complete", "failed"]),
   reconciliationDueAt: z.coerce.date().nullable(),
   lastSuccessfulSyncAt: z.coerce.date().nullable()
