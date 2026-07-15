@@ -19,6 +19,7 @@ import { threadReadProviderFailure } from "./thread-read.js";
 import { challenge, cookieOptions, correlationId, hash, requireCsrf } from "./route-helpers/security.js";
 import { authenticatedUser } from "./route-helpers/session.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerAuthRoutes } from "./routes/auth.js";
 
 const config = loadConfig();
 const redis = new Redis(config.REDIS_URL);
@@ -166,14 +167,7 @@ app.delete<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId", async 
   return reply.code(204).send();
 });
 
-app.post("/v1/auth/logout", async (request, reply) => {
-  const user = await authenticatedUser(request, pool);
-  if (!user) return reply.code(204).clearCookie("aio_session", cookieOptions(config)).clearCookie("aio_csrf", { path: "/" }).send();
-  if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
-  const signed = request.unsignCookie(request.cookies.aio_session ?? "");
-  await pool.query("UPDATE sessions SET revoked_at=now() WHERE token_hash=$1", [hash(signed.value!)]);
-  return reply.code(204).clearCookie("aio_session", cookieOptions(config)).clearCookie("aio_csrf", { path: "/" }).send();
-});
+registerAuthRoutes(app, { config, pool });
 
 app.post("/v1/auth/google/start", async (_request, reply) => {
   const state = randomBytes(32).toString("base64url");
