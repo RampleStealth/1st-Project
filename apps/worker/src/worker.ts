@@ -9,7 +9,7 @@ import { closeQueues, enqueueProviderCommand, enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
 import { hasUnprocessedPendingHistory, shouldRetryForUnavailableHistory } from "./sync-state.js";
-import { claimCommand, completeClaim, recoverExpiredLeases } from "@aio/database/repositories/provider-command";
+import { claimCommand, claimOutboxEvents, completeClaim, markOutboxPublished, recoverExpiredLeases, releaseOutboxClaim } from "@aio/database/repositories/provider-command";
 
 const config = loadConfig();
 const commandWorker = new Worker("gmail-commands", async (job) => {
@@ -18,8 +18,8 @@ const commandWorker = new Worker("gmail-commands", async (job) => {
   await completeClaim(job.data.commandId, claim.claimId, "failed", "unsupported_command");
 }, { connection: { url: config.REDIS_URL, maxRetriesPerRequest: null } });
 async function dispatchCommandOutbox() {
-  const events = await withTransaction(async (client) => { const rows = await client.query<{ id: string; aggregate_id: string }>("SELECT id,aggregate_id FROM outbox_events WHERE published_at IS NULL AND event_type='provider_command.requested' FOR UPDATE SKIP LOCKED LIMIT 20"); return rows.rows; });
-  for (const event of events) { const command = await pool.query<{ command_type: import("@aio/contracts").ProviderCommandType }>("SELECT command_type FROM provider_commands WHERE id=$1", [event.aggregate_id]); if (!command.rowCount) continue; await enqueueProviderCommand(event.aggregate_id, command.rows[0].command_type); await pool.query("UPDATE outbox_events SET published_at=now() WHERE id=$1 AND published_at IS NULL", [event.id]); }
+  const claimed = await claimOutboxEvents();
+  for (const event of claimed.events) { try { const command = await pool.query<{ command_type: import("@aio/contracts").ProviderCommandType }>("SELECT command_type FROM provider_commands WHERE id=$1", [event.aggregate_id]); if (!command.rowCount) { await releaseOutboxClaim(event.id, claimed.claimId); continue; } await enqueueProviderCommand(event.aggregate_id, command.rows[0].command_type); await markOutboxPublished(event.id, claimed.claimId); } catch (error) { await releaseOutboxClaim(event.id, claimed.claimId); logger.warn({ eventId: event.id, errorCode: "command_outbox_enqueue_failed" }, "provider command outbox enqueue failed"); } }
 }
 setInterval(() => { void dispatchCommandOutbox().catch((error) => logger.error({ err: error }, "provider command outbox dispatch failed")); }, 5_000).unref();
 setInterval(() => { void recoverExpiredLeases().catch((error: unknown) => logger.error({ err: error }, "provider command lease recovery failed")); }, 30_000).unref();
