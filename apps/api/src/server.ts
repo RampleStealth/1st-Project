@@ -8,13 +8,11 @@ import { loadConfig } from "@aio/config";
 import { pool, withTransaction } from "@aio/database";
 import { ensureMailboxSyncState, recordPendingHistory } from "@aio/database/repositories/mailbox-sync";
 import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
-import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { authorizationUrl, classifyGmailError, exchangeCode, exchangeWriteUpgradeCode, getThreadFull, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox, writeUpgradeAuthorizationUrl } from "@aio/gmail";
+import { authorizationUrl, exchangeCode, exchangeWriteUpgradeCode, getThreadFull, gmailForMailbox, isGmailProviderError, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox, writeUpgradeAuthorizationUrl } from "@aio/gmail";
 import { enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import { encryptSecret } from "@aio/security";
 import { gmailNotificationSchema } from "@aio/contracts";
-import { CursorError, decodeThreadCursor, encodeThreadCursor, threadListQuerySchema } from "./mailbox-list.js";
 import { threadReadProviderFailure } from "./thread-read.js";
 import { challenge, cookieOptions, correlationId, hash, requireCsrf } from "./route-helpers/security.js";
 import { authenticatedUser } from "./route-helpers/session.js";
@@ -36,49 +34,7 @@ await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods
 app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
 registerHealthRoutes(app);
 
-registerMailboxWorkspaceRoutes(app,{pool});
-
-app.get<{ Params: { mailboxId: string }; Querystring: { view?: string; cursor?: string; limit?: string } }>("/v1/mailboxes/:mailboxId/threads", async (request, reply) => {
-  const user = await authenticatedUser(request, pool);
-  if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to view your mailbox." });
-  const query = threadListQuerySchema.safeParse(request.query);
-  if (!query.success) return reply.code(400).send({ code: "invalid_thread_list_request", message: "Choose a valid mailbox view and page size." });
-  const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
-  if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
-  if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before loading your mailbox.", retryable: false });
-  const context = { userId: user.id, mailboxId: mailbox.id, view: query.data.view, limit: query.data.limit };
-  let providerPageToken: string | undefined;
-  try {
-    providerPageToken = query.data.cursor ? decodeThreadCursor(query.data.cursor, context, config.TOKEN_ENCRYPTION_KEY_BASE64) : undefined;
-  } catch (error) {
-    if (error instanceof CursorError) return reply.code(400).send({ code: "invalid_cursor", message: "This page link is no longer valid. Reload the mailbox view." });
-    throw error;
-  }
-  let page: Awaited<ReturnType<typeof listThreads>>;
-  let hydrated: Awaited<ReturnType<typeof hydrateThreadMetadata>>;
-  try {
-    const gmail = gmailForMailbox(config, mailbox.encrypted_refresh_token);
-    page = await listThreads(gmail, query.data.view, providerPageToken, query.data.limit);
-    hydrated = await hydrateThreadMetadata(gmail, page.threadIds, 5);
-  } catch (error) {
-    const failure = classifyGmailError(error, "resource");
-    if (failure === "reauthorization_required") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before loading your mailbox.", retryable: false });
-    if (failure === "rate_limited" || failure === "transient_provider_failure") return reply.code(503).send({ code: "provider_temporarily_unavailable", message: "Gmail is temporarily unavailable. Try again shortly.", retryable: true });
-    return reply.code(502).send({ code: "provider_thread_list_failed", message: "We could not load this Gmail view.", retryable: true });
-  }
-  try {
-    const items = await withTransaction(async (client) => {
-      const projected = [];
-      for (const thread of hydrated) projected.push(await upsertThreadProjection(client, mailbox.id, thread));
-      return projected.filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
-    });
-    const nextCursor = page.nextPageToken ? encodeThreadCursor({ ...context, providerPageToken: page.nextPageToken, expiresAt: Date.now() + 15 * 60_000 }, config.TOKEN_ENCRYPTION_KEY_BASE64) : null;
-    return { items, nextCursor, source: "gmail", fetchedAt: new Date() };
-  } catch (error) {
-    request.log.error({ err: error, mailboxId: mailbox.id }, "thread projection update failed");
-    return reply.code(503).send({ code: "projection_temporarily_unavailable", message: "We loaded Gmail but could not prepare this mailbox view. Try again shortly.", retryable: true });
-  }
-});
+registerMailboxWorkspaceRoutes(app,{config,pool,withTransaction});
 
 app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mailboxId/threads/:threadId", async (request, reply) => {
   const user = await authenticatedUser(request, pool);
