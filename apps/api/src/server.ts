@@ -20,6 +20,7 @@ import { challenge, cookieOptions, correlationId, hash, requireCsrf } from "./ro
 import { authenticatedUser } from "./route-helpers/session.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerMailboxLifecycleRoutes } from "./routes/mailbox-lifecycle.js";
 
 const config = loadConfig();
 const redis = new Redis(config.REDIS_URL);
@@ -150,22 +151,7 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
   } catch (cause) { if (isGmailProviderError(cause)) request.log.warn(sanitizeGmailProviderError(cause, { operation: "gmail_write_upgrade", mailboxId: mailbox.id, correlationId: correlationId(request) }), "gmail write upgrade failed"); else request.log.error({ mailboxId: mailbox.id, correlationId: correlationId(request), errorCode: "write_upgrade_failed" }, "gmail write upgrade failed"); await closeAttempt("upgrade_failed", "gmail.write_permission_failed", "provider_or_transaction_failure"); return reply.redirect(`${config.APP_ORIGIN}/?permission=failed`); }
 });
 
-app.delete<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId", async (request, reply) => {
-  const user = await authenticatedUser(request, pool);
-  if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to manage your connection." });
-  if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
-  const account = await pool.query<{ id: string; encrypted_refresh_token: string }>("SELECT id,encrypted_refresh_token FROM mailbox_accounts WHERE id=$1 AND user_id=$2 AND status <> 'disconnected'", [request.params.mailboxId, user.id]);
-  if (!account.rowCount) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
-  try { await stopWatch(gmailForMailbox(config, account.rows[0].encrypted_refresh_token)); } catch (error) {
-    if (isGmailProviderError(error)) request.log.warn(sanitizeGmailProviderError(error, { operation: "gmail_watch_stop", mailboxId: account.rows[0].id, correlationId: correlationId(request) }), "gmail watch stop failed during disconnect");
-    else request.log.warn({ err: error }, "gmail watch stop failed during disconnect");
-  }
-  await withTransaction(async (client) => {
-    await client.query("UPDATE mailbox_accounts SET status='disconnected',disconnected_at=now(),encrypted_refresh_token='' WHERE id=$1", [account.rows[0].id]);
-    await client.query("INSERT INTO audit_events(actor_type,actor_id,event_type,object_type,object_id,correlation_id) VALUES('user',$1,'gmail.disconnected','mailbox_account',$2,$3)", [user.id, account.rows[0].id, correlationId(request)]);
-  });
-  return reply.code(204).send();
-});
+registerMailboxLifecycleRoutes(app,{config,pool,withTransaction});
 
 registerAuthRoutes(app, { config, pool });
 
