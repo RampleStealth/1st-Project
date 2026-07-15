@@ -1,0 +1,9 @@
+{
+  "name": "@aio/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "tsx watch src/server.ts", "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit" },
+  "dependencies": { "@aio/config": "*", "tsx": "^4.19.3" },
+  "devDependencies": { "@types/node": "^22.13.10", "typescript": "^5.8.2" }
+}

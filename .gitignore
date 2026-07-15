@@ -1,0 +1,29 @@
+node_modules/
+dist/
+.next/
+coverage/
+.env
+.env.*.local
+!.env.example
+*.log
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+
+# Build
+.next/
+dist/
+build/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid

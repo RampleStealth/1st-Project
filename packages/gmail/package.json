@@ -1,0 +1,8 @@
+{
+  "name": "@aio/gmail",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@aio/config": "*", "@aio/security": "*", "googleapis": "^144.0.0" }
+}
