@@ -5,7 +5,7 @@ export type MailboxStatus = z.infer<typeof mailboxStatusSchema>;
 
 export const gmailNotificationSchema = z.object({
   emailAddress: z.string().email(),
-  historyId: z.string().min(1)
+  historyId: z.string().regex(/^\d+$/)
 });
 
 export const syncJobSchema = z.object({
@@ -14,6 +14,19 @@ export const syncJobSchema = z.object({
   reason: z.enum(["initial", "notification", "reconciliation", "history_expired"])
 });
 export type SyncJob = z.infer<typeof syncJobSchema>;
+
+export const syncErrorCodeSchema = z.enum(["history_expired", "resource_deleted", "reauthorization_required", "rate_limited", "transient_provider_failure", "unknown_provider_failure"]);
+export type SyncErrorCode = z.infer<typeof syncErrorCodeSchema>;
+
+export const mailboxSyncStateSchema = z.object({
+  mailboxAccountId: z.string().uuid(),
+  appliedHistoryId: z.string().regex(/^\d+$/).nullable(),
+  pendingHistoryId: z.string().regex(/^\d+$/).nullable(),
+  initialSyncStatus: z.enum(["pending", "running", "complete", "failed"]),
+  reconciliationDueAt: z.coerce.date().nullable(),
+  lastSuccessfulSyncAt: z.coerce.date().nullable()
+});
+export type MailboxSyncState = z.infer<typeof mailboxSyncStateSchema>;
 
 export const auditEventSchema = z.object({
   actorType: z.enum(["user", "system"]),

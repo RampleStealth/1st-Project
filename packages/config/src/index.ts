@@ -14,6 +14,7 @@ const configSchema = z.object({
   PUBSUB_PUSH_AUDIENCE: z.string().url(),
   PUBSUB_SERVICE_ACCOUNT_EMAIL: z.string().email(),
   GMAIL_INITIAL_SYNC_LIMIT: z.coerce.number().int().min(1).max(1_000).default(500),
+  SYNC_RECONCILIATION_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1_440).default(30),
   TOKEN_ENCRYPTION_KEY_BASE64: z.string().min(43),
   SESSION_SECRET: z.string().min(32),
   PORT: z.coerce.number().int().positive().default(4000),
