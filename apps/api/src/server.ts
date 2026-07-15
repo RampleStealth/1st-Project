@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import Fastify, { type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -16,6 +16,8 @@ import { encryptSecret } from "@aio/security";
 import { gmailNotificationSchema } from "@aio/contracts";
 import { CursorError, decodeThreadCursor, encodeThreadCursor, threadListQuerySchema } from "./mailbox-list.js";
 import { threadReadProviderFailure } from "./thread-read.js";
+import { challenge, cookieOptions, correlationId, hash, requireCsrf } from "./route-helpers/security.js";
+import { authenticatedUser } from "./route-helpers/session.js";
 
 const config = loadConfig();
 const redis = new Redis(config.REDIS_URL);
@@ -25,34 +27,19 @@ const pubsubVerifier = new OAuth2Client();
 await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
 await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods: ["GET", "POST", "DELETE"] });
 
-function hash(value: string) { return createHash("sha256").update(value).digest("hex"); }
-function challenge(verifier: string) { return createHash("sha256").update(verifier).digest("base64url"); }
-function cookieOptions() { return { httpOnly: true, secure: config.NODE_ENV === "production", sameSite: "lax" as const, path: "/", signed: true }; }
-function correlationId(request: FastifyRequest) { return String(request.headers["x-correlation-id"]); }
-async function authenticatedUser(request: FastifyRequest) {
-  const signed = request.unsignCookie(request.cookies.aio_session ?? "");
-  if (!signed.valid || !signed.value) return null;
-  const result = await pool.query<{ id: string }>("SELECT user_id AS id FROM sessions WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at > now()", [hash(signed.value)]);
-  return result.rows[0] ?? null;
-}
-function requireCsrf(request: FastifyRequest) {
-  const expected = request.cookies.aio_csrf;
-  const actual = request.headers["x-csrf-token"];
-  return Boolean(expected && typeof actual === "string" && expected === actual);
-}
 
 app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
 app.get("/health", async () => ({ status: "ok" }));
 
 app.get("/v1/mailboxes", async (request, reply) => {
-  const user = await authenticatedUser(request);
+  const user = await authenticatedUser(request, pool);
   if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to manage your connection." });
   const result = await pool.query("SELECT m.id,m.email_address,m.status,m.last_synced_at,m.last_sync_error,m.watch_expires_at,m.created_at,COALESCE(p.write_capability,'read_only') AS write_capability FROM mailbox_accounts m LEFT JOIN mailbox_permission_state p ON p.mailbox_account_id=m.id WHERE m.user_id=$1 AND m.status <> 'disconnected' ORDER BY m.created_at DESC", [user.id]);
   return result.rows;
 });
 
 app.get<{ Params: { mailboxId: string }; Querystring: { view?: string; cursor?: string; limit?: string } }>("/v1/mailboxes/:mailboxId/threads", async (request, reply) => {
-  const user = await authenticatedUser(request);
+  const user = await authenticatedUser(request, pool);
   if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to view your mailbox." });
   const query = threadListQuerySchema.safeParse(request.query);
   if (!query.success) return reply.code(400).send({ code: "invalid_thread_list_request", message: "Choose a valid mailbox view and page size." });
@@ -94,7 +81,7 @@ app.get<{ Params: { mailboxId: string }; Querystring: { view?: string; cursor?: 
 });
 
 app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mailboxId/threads/:threadId", async (request, reply) => {
-  const user = await authenticatedUser(request);
+  const user = await authenticatedUser(request, pool);
   if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to read your mailbox." });
   // This lookup proves ownership before credentials are decrypted or Gmail is contacted.
   const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
@@ -120,13 +107,13 @@ app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mai
   }
 });
 app.get<{ Params: { mailboxId: string; commandId: string } }>("/v1/mailboxes/:mailboxId/provider-commands/:commandId", async (request, reply) => {
-  const user = await authenticatedUser(request); if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to view command status." });
+  const user = await authenticatedUser(request, pool); if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to view command status." });
   const result = await pool.query("SELECT c.id,c.command_type,c.status,c.attempt_count,c.next_attempt_at,c.failure_code,c.failure_detail,c.created_at,c.updated_at,c.completed_at FROM provider_commands c JOIN mailbox_accounts m ON m.id=c.mailbox_account_id WHERE c.id=$1 AND c.mailbox_account_id=$2 AND m.user_id=$3", [request.params.commandId, request.params.mailboxId, user.id]);
   if (!result.rowCount) return reply.code(404).send({ code: "provider_command_not_found", message: "Command not found." }); return result.rows[0];
 });
 
 app.post<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId/permissions/write/start", async (request, reply) => {
-  const user = await authenticatedUser(request);
+  const user = await authenticatedUser(request, pool);
   if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to request Gmail write permission." });
   if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
   const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
@@ -140,7 +127,7 @@ app.post<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId/permission
 });
 
 app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1/auth/google/write/callback", async (request, reply) => {
-  const user = await authenticatedUser(request); const { code, state, error } = request.query;
+  const user = await authenticatedUser(request, pool); const { code, state, error } = request.query;
   if (!state) return reply.redirect(`${config.APP_ORIGIN}/?permission=expired`);
   const stored = await redis.getdel(`write-oauth:${state}`);
   if (!stored) return reply.redirect(`${config.APP_ORIGIN}/?permission=expired`);
@@ -162,7 +149,7 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
 });
 
 app.delete<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId", async (request, reply) => {
-  const user = await authenticatedUser(request);
+  const user = await authenticatedUser(request, pool);
   if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to manage your connection." });
   if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
   const account = await pool.query<{ id: string; encrypted_refresh_token: string }>("SELECT id,encrypted_refresh_token FROM mailbox_accounts WHERE id=$1 AND user_id=$2 AND status <> 'disconnected'", [request.params.mailboxId, user.id]);
@@ -179,12 +166,12 @@ app.delete<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId", async 
 });
 
 app.post("/v1/auth/logout", async (request, reply) => {
-  const user = await authenticatedUser(request);
-  if (!user) return reply.code(204).clearCookie("aio_session", cookieOptions()).clearCookie("aio_csrf", { path: "/" }).send();
+  const user = await authenticatedUser(request, pool);
+  if (!user) return reply.code(204).clearCookie("aio_session", cookieOptions(config)).clearCookie("aio_csrf", { path: "/" }).send();
   if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
   const signed = request.unsignCookie(request.cookies.aio_session ?? "");
   await pool.query("UPDATE sessions SET revoked_at=now() WHERE token_hash=$1", [hash(signed.value!)]);
-  return reply.code(204).clearCookie("aio_session", cookieOptions()).clearCookie("aio_csrf", { path: "/" }).send();
+  return reply.code(204).clearCookie("aio_session", cookieOptions(config)).clearCookie("aio_csrf", { path: "/" }).send();
 });
 
 app.post("/v1/auth/google/start", async (_request, reply) => {
@@ -232,7 +219,7 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
       await pool.query("UPDATE mailbox_accounts SET last_sync_error='watch_setup_failed' WHERE id=$1", [mailbox.id]);
     }
     await enqueueSync({ mailboxAccountId: mailbox.id, reason: "initial" });
-    reply.setCookie("aio_session", sessionToken, { ...cookieOptions(), expires: expiresAt });
+    reply.setCookie("aio_session", sessionToken, { ...cookieOptions(config), expires: expiresAt });
     reply.setCookie("aio_csrf", randomBytes(32).toString("base64url"), { httpOnly: false, secure: config.NODE_ENV === "production", sameSite: "lax", path: "/", expires: expiresAt });
     return reply.redirect(`${config.APP_ORIGIN}/connect/complete${syncDelayed ? "?sync=delayed" : ""}`);
   } catch (cause) {
