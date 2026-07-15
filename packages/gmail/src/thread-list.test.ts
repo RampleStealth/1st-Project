@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mapWithConcurrency, threadListLabel } from "./index.js";
+import { GmailPaginationValidationError, listThreads, mapWithConcurrency, sanitizeGmailProviderError, threadListLabel } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -21,4 +21,27 @@ test("metadata hydration helper bounds concurrent requests", async () => {
   });
   assert.deepEqual(result, [2, 4, 6, 8, 10]);
   assert.equal(maximum, 2);
+});
+
+test("adapter rejects invalid page sizes before calling Gmail", async () => {
+  for (const value of [0, -1, 1.5, Number.NaN, Infinity, 101]) {
+    let called = false;
+    const gmail = { users: { threads: { list: async () => { called = true; return { data: {} }; } } } };
+    await assert.rejects(() => listThreads(gmail as never, "inbox", undefined, value), GmailPaginationValidationError);
+    assert.equal(called, false);
+  }
+});
+
+test("provider log sanitizer strips sensitive provider fields", () => {
+  const secretValues = ["Bearer access-token", "refresh-token", "person@example.com", "gmail-resource-id", "https://gmail.googleapis.com/private", "response-body-secret"];
+  const providerError = {
+    code: 401,
+    response: { status: 401, data: { authorization: secretValues[0], refreshToken: secretValues[1], email: secretValues[2], id: secretValues[3], body: secretValues[5] } },
+    config: { url: secretValues[4], headers: { authorization: secretValues[0] } },
+    request: { headers: { authorization: secretValues[0] } }
+  };
+  const serialized = JSON.stringify(sanitizeGmailProviderError(providerError, { operation: "gmail_thread_list", mailboxId: "mailbox-uuid", correlationId: "correlation-uuid" }));
+  for (const secret of secretValues) assert.equal(serialized.includes(secret), false);
+  assert.match(serialized, /reauthorization_required/);
+  assert.match(serialized, /http_401/);
 });

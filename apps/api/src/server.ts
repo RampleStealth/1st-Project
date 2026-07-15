@@ -9,7 +9,7 @@ import { pool, withTransaction } from "@aio/database";
 import { ensureMailboxSyncState, recordPendingHistory } from "@aio/database/repositories/mailbox-sync";
 import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { authorizationUrl, classifyGmailError, exchangeCode, gmailForMailbox, hydrateThreadMetadata, listThreads, stopWatch, watchMailbox } from "@aio/gmail";
+import { authorizationUrl, classifyGmailError, exchangeCode, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, sanitizeGmailProviderError, stopWatch, watchMailbox } from "@aio/gmail";
 import { enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import { encryptSecret } from "@aio/security";
@@ -62,7 +62,7 @@ app.get<{ Params: { mailboxId: string }; Querystring: { view?: string; cursor?: 
   try {
     providerPageToken = query.data.cursor ? decodeThreadCursor(query.data.cursor, context, config.TOKEN_ENCRYPTION_KEY_BASE64) : undefined;
   } catch (error) {
-    if (error instanceof CursorError) return reply.code(400).send({ code: error.code, message: "This page link is no longer valid. Reload the mailbox view." });
+    if (error instanceof CursorError) return reply.code(400).send({ code: "invalid_cursor", message: "This page link is no longer valid. Reload the mailbox view." });
     throw error;
   }
   let page: Awaited<ReturnType<typeof listThreads>>;
@@ -97,7 +97,10 @@ app.delete<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId", async 
   if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
   const account = await pool.query<{ id: string; encrypted_refresh_token: string }>("SELECT id,encrypted_refresh_token FROM mailbox_accounts WHERE id=$1 AND user_id=$2 AND status <> 'disconnected'", [request.params.mailboxId, user.id]);
   if (!account.rowCount) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
-  try { await stopWatch(gmailForMailbox(config, account.rows[0].encrypted_refresh_token)); } catch (error) { request.log.warn({ err: error }, "gmail watch stop failed during disconnect"); }
+  try { await stopWatch(gmailForMailbox(config, account.rows[0].encrypted_refresh_token)); } catch (error) {
+    if (isGmailProviderError(error)) request.log.warn(sanitizeGmailProviderError(error, { operation: "gmail_watch_stop", mailboxId: account.rows[0].id, correlationId: correlationId(request) }), "gmail watch stop failed during disconnect");
+    else request.log.warn({ err: error }, "gmail watch stop failed during disconnect");
+  }
   await withTransaction(async (client) => {
     await client.query("UPDATE mailbox_accounts SET status='disconnected',disconnected_at=now(),encrypted_refresh_token='' WHERE id=$1", [account.rows[0].id]);
     await client.query("INSERT INTO audit_events(actor_type,actor_id,event_type,object_type,object_id,correlation_id) VALUES('user',$1,'gmail.disconnected','mailbox_account',$2,$3)", [user.id, account.rows[0].id, correlationId(request)]);
@@ -154,7 +157,8 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
       await pool.query("UPDATE mailbox_accounts SET watch_expires_at=$2,last_sync_error=NULL WHERE id=$1", [mailbox.id, watch.expiration ? new Date(Number(watch.expiration)) : null]);
     } catch (watchError) {
       syncDelayed = true;
-      request.log.warn({ err: watchError, mailboxId: mailbox.id }, "gmail watch setup delayed");
+      if (isGmailProviderError(watchError)) request.log.warn(sanitizeGmailProviderError(watchError, { operation: "gmail_watch_setup", mailboxId: mailbox.id, correlationId: correlationId(request) }), "gmail watch setup delayed");
+      else request.log.warn({ err: watchError, mailboxId: mailbox.id }, "gmail watch setup delayed");
       await pool.query("UPDATE mailbox_accounts SET last_sync_error='watch_setup_failed' WHERE id=$1", [mailbox.id]);
     }
     await enqueueSync({ mailboxAccountId: mailbox.id, reason: "initial" });
@@ -162,7 +166,8 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
     reply.setCookie("aio_csrf", randomBytes(32).toString("base64url"), { httpOnly: false, secure: config.NODE_ENV === "production", sameSite: "lax", path: "/", expires: expiresAt });
     return reply.redirect(`${config.APP_ORIGIN}/connect/complete${syncDelayed ? "?sync=delayed" : ""}`);
   } catch (cause) {
-    request.log.error({ err: cause }, "gmail connection failed");
+    if (isGmailProviderError(cause)) request.log.error(sanitizeGmailProviderError(cause, { operation: "gmail_oauth_connection", correlationId: correlationId(request) }), "gmail connection failed");
+    else request.log.error({ err: cause }, "gmail connection failed");
     return reply.code(502).send({ code: "gmail_connection_failed", message: "We could not connect Gmail. Your account was not changed." });
   }
 });
@@ -183,7 +188,7 @@ app.post("/v1/webhooks/gmail", async (request, reply) => {
       await enqueueSync({ mailboxAccountId: account.rows[0].id, requestedHistoryId: notification.historyId, reason: "notification" });
     }
     return reply.code(204).send();
-  } catch (cause) { request.log.warn({ err: cause }, "rejected gmail notification"); return reply.code(401).send(); }
+  } catch { request.log.warn({ correlationId: correlationId(request) }, "rejected gmail notification"); return reply.code(401).send(); }
 });
 
 app.listen({ host: "0.0.0.0", port: config.PORT }).catch((error) => { logger.fatal({ err: error }, "api startup failed"); process.exit(1); });

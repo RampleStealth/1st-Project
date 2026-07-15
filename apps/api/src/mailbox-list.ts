@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { decryptSecret, encryptSecret } from "@aio/security";
+import { decryptSecret, deriveThreadCursorKey, encryptSecret } from "@aio/security";
 import { mailboxViewSchema, type MailboxView } from "@aio/contracts";
 
 const cursorSchema = z.object({
+  version: z.literal(1),
   userId: z.string().uuid(),
   mailboxId: z.string().uuid(),
   view: mailboxViewSchema,
@@ -12,20 +13,20 @@ const cursorSchema = z.object({
 });
 export type CursorContext = { userId: string; mailboxId: string; view: MailboxView; limit: number };
 export class CursorError extends Error {
-  constructor(readonly code: "invalid_cursor" | "expired_cursor" | "cursor_context_mismatch") { super(code); this.name = "CursorError"; }
+  constructor() { super("invalid_cursor"); this.name = "CursorError"; }
 }
 
-/** AES-GCM makes Gmail page tokens confidential and authenticated outside the API. */
+/** Versioned AES-GCM cursor payloads use only the domain-separated cursor key. */
 export function encodeThreadCursor(payload: CursorContext & { providerPageToken: string; expiresAt: number }, encryptionKey: string) {
-  return encryptSecret(JSON.stringify(payload), encryptionKey);
+  return encryptSecret(JSON.stringify({ version: 1, ...payload }), deriveThreadCursorKey(encryptionKey));
 }
 
 export function decodeThreadCursor(cursor: string, context: CursorContext, encryptionKey: string): string {
   let payload: z.infer<typeof cursorSchema>;
-  try { payload = cursorSchema.parse(JSON.parse(decryptSecret(cursor, encryptionKey))); }
-  catch { throw new CursorError("invalid_cursor"); }
-  if (payload.expiresAt <= Date.now()) throw new CursorError("expired_cursor");
-  if (payload.userId !== context.userId || payload.mailboxId !== context.mailboxId || payload.view !== context.view || payload.limit !== context.limit) throw new CursorError("cursor_context_mismatch");
+  try { payload = cursorSchema.parse(JSON.parse(decryptSecret(cursor, deriveThreadCursorKey(encryptionKey)))); }
+  catch { throw new CursorError(); }
+  if (payload.expiresAt <= Date.now()) throw new CursorError();
+  if (payload.userId !== context.userId || payload.mailboxId !== context.mailboxId || payload.view !== context.view || payload.limit !== context.limit) throw new CursorError();
   return payload.providerPageToken;
 }
 

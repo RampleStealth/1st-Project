@@ -4,7 +4,7 @@ import { loadConfig } from "@aio/config";
 import { findMailboxById, pool, withTransaction } from "@aio/database";
 import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { changedMessageIds, classifyGmailError, currentHistoryId, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, watchMailbox } from "@aio/gmail";
+import { changedMessageIds, classifyGmailError, currentHistoryId, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, sanitizeGmailProviderError, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
@@ -125,7 +125,8 @@ async function syncMailbox(job: SyncJob) {
 const worker = new Worker<SyncJob, void, "sync-mailbox">("gmail-sync", async (job) => syncMailbox(job.data), { connection: { url: config.REDIS_URL, maxRetriesPerRequest: null }, concurrency: 10, limiter: { max: 25, duration: 1_000 } });
 worker.on("failed", (job, error) => {
   if (error instanceof MailboxLeaseUnavailable) logger.debug({ jobId: job?.id }, "sync job deferred while mailbox lease is active");
-  else logger.error({ jobId: job?.id, err: error }, "gmail sync job failed");
+  else if (isGmailProviderError(error)) logger.error(sanitizeGmailProviderError(error, { operation: "gmail_sync", jobId: job?.id, mailboxId: job?.data.mailboxAccountId }), "gmail sync job failed");
+  else logger.error({ jobId: job?.id, err: error }, "sync job failed");
 });
 
 async function renewWatches() {
@@ -134,7 +135,10 @@ async function renewWatches() {
     try {
       const result = await watchMailbox(gmailForMailbox(config, account.encrypted_refresh_token), config.GOOGLE_PUBSUB_TOPIC);
       await pool.query("UPDATE mailbox_accounts SET watch_expires_at=$2 WHERE id=$1", [account.id, result.expiration ? new Date(Number(result.expiration)) : null]);
-    } catch (error) { logger.error({ mailboxId: account.id, err: error }, "gmail watch renewal failed"); }
+    } catch (error) {
+      if (isGmailProviderError(error)) logger.error(sanitizeGmailProviderError(error, { operation: "gmail_watch_renewal", mailboxId: account.id }), "gmail watch renewal failed");
+      else logger.error({ mailboxId: account.id, err: error }, "gmail watch renewal failed");
+    }
   }
 }
 

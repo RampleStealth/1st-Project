@@ -5,6 +5,9 @@ import { decryptSecret } from "@aio/security";
 import type { MailboxView, SyncErrorCode } from "@aio/contracts";
 
 const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
+export class GmailPaginationValidationError extends Error {
+  constructor() { super("Gmail page size must be an integer from 1 through 100"); this.name = "GmailPaginationValidationError"; }
+}
 
 export function createOAuthClient(config: AppConfig) {
   return new google.auth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, config.GOOGLE_REDIRECT_URI);
@@ -78,6 +81,7 @@ export function threadListLabel(view: MailboxView): string | undefined {
 }
 
 export async function listThreads(gmail: gmail_v1.Gmail, view: MailboxView, pageToken: string | undefined, maxResults: number) {
+  if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 100) throw new GmailPaginationValidationError();
   const label = threadListLabel(view);
   const response = await gmail.users.threads.list({ userId: "me", labelIds: label ? [label] : undefined, pageToken, maxResults, includeSpamTrash: false });
   return { threadIds: response.data.threads?.flatMap((thread) => thread.id ? [thread.id] : []) ?? [], nextPageToken: response.data.nextPageToken ?? null };
@@ -129,4 +133,39 @@ export function classifyGmailError(error: unknown, operation: "history" | "resou
   if (status === 404) return operation === "history" ? "history_expired" : "resource_deleted";
   if (status && status >= 500) return "transient_provider_failure";
   return "unknown_provider_failure";
+}
+
+type ProviderLogContext = { operation: string; mailboxId?: string; correlationId?: string; jobId?: string };
+type ProviderErrorShape = { code?: unknown; response?: { status?: unknown; data?: unknown }; config?: unknown; request?: unknown };
+
+function providerStatusCategory(error: unknown): "http_401" | "http_404" | "http_429" | "http_4xx" | "http_5xx" | "network" | "unknown" {
+  const value = error as ProviderErrorShape;
+  const status = typeof value?.code === "number" ? value.code : typeof value?.response?.status === "number" ? value.response.status : undefined;
+  if (status === 401) return "http_401";
+  if (status === 404) return "http_404";
+  if (status === 429) return "http_429";
+  if (status && status >= 500) return "http_5xx";
+  if (status && status >= 400) return "http_4xx";
+  return value?.request ? "network" : "unknown";
+}
+
+export function isGmailProviderError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as ProviderErrorShape;
+  return typeof value.code === "number" || typeof value.response?.status === "number" || value.response?.data !== undefined || Boolean(value.config && value.request);
+}
+
+/** Allowlisted metadata only; raw provider responses, headers, tokens, URLs, and IDs never enter logs. */
+export function sanitizeGmailProviderError(error: unknown, context: ProviderLogContext) {
+  const applicationErrorCode = classifyGmailError(error, "resource");
+  return {
+    applicationErrorCode,
+    statusCategory: providerStatusCategory(error),
+    operation: context.operation,
+    ...(context.mailboxId ? { mailboxId: context.mailboxId } : {}),
+    ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+    ...(context.jobId ? { jobId: context.jobId } : {}),
+    retryable: applicationErrorCode === "rate_limited" || applicationErrorCode === "transient_provider_failure",
+    message: "Gmail provider operation failed"
+  };
 }
