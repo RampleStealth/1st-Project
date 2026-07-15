@@ -5,3 +5,5 @@ Initial Gmail connection requests `gmail.readonly` only. A mailbox owner may exp
 The server stores a random, one-time Redis state for ten minutes with the authenticated user, mailbox, requested capability, and PKCE verifier. The callback consumes it with `GETDEL`, requires the same session user, verifies the Gmail profile email equals the selected mailbox, validates the returned `gmail.modify` scope, and requires a new non-empty refresh token. Existing encrypted credentials remain untouched on every failure.
 
 Successful replacement of the encrypted refresh token, persisted scopes, `write_granted` state, and audit event occur in one database transaction. Declined and failed transitions retain read capability. OAuth codes, state, verifier, tokens, and raw provider errors are never logged.
+
+Each request has a non-secret UUID attempt ID and ten-minute pending expiry. Callback outcomes are guarded by both `upgrade_pending` and the attempt ID, so older attempts cannot regress a grant. A new request after `write_granted` preserves the existing grant; it is not used to rotate credentials.
