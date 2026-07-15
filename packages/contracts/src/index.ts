@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const mailboxStatusSchema = z.enum(["active", "reauthorization_required", "disconnected", "sync_failed"]);
 export type MailboxStatus = z.infer<typeof mailboxStatusSchema>;
+export const mailboxWriteCapabilitySchema = z.enum(["read_only", "upgrade_pending", "write_granted", "upgrade_declined", "upgrade_failed"]);
+export type MailboxWriteCapability = z.infer<typeof mailboxWriteCapabilitySchema>;
 
 export const gmailNotificationSchema = z.object({
   emailAddress: z.string().email(),

@@ -5,6 +5,7 @@ export type MailboxSummary = {
   last_synced_at: string | null;
   last_sync_error: string | null;
   watch_expires_at: string | null;
+  write_capability?: "read_only" | "upgrade_pending" | "write_granted" | "upgrade_declined" | "upgrade_failed";
 };
 
 export type ConnectionHealth = {

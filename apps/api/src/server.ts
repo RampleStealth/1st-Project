@@ -9,7 +9,7 @@ import { pool, withTransaction } from "@aio/database";
 import { ensureMailboxSyncState, recordPendingHistory } from "@aio/database/repositories/mailbox-sync";
 import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { authorizationUrl, classifyGmailError, exchangeCode, getThreadFull, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox } from "@aio/gmail";
+import { authorizationUrl, classifyGmailError, exchangeCode, exchangeWriteUpgradeCode, getThreadFull, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError, stopWatch, watchMailbox, writeUpgradeAuthorizationUrl } from "@aio/gmail";
 import { enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import { encryptSecret } from "@aio/security";
@@ -47,7 +47,7 @@ app.get("/health", async () => ({ status: "ok" }));
 app.get("/v1/mailboxes", async (request, reply) => {
   const user = await authenticatedUser(request);
   if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to manage your connection." });
-  const result = await pool.query("SELECT id,email_address,status,last_synced_at,last_sync_error,watch_expires_at,created_at FROM mailbox_accounts WHERE user_id=$1 AND status <> 'disconnected' ORDER BY created_at DESC", [user.id]);
+  const result = await pool.query("SELECT m.id,m.email_address,m.status,m.last_synced_at,m.last_sync_error,m.watch_expires_at,m.created_at,COALESCE(p.write_capability,'read_only') AS write_capability FROM mailbox_accounts m LEFT JOIN mailbox_permission_state p ON p.mailbox_account_id=m.id WHERE m.user_id=$1 AND m.status <> 'disconnected' ORDER BY m.created_at DESC", [user.id]);
   return result.rows;
 });
 
@@ -118,6 +118,41 @@ app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mai
     request.log.error({ mailboxId: mailbox.id, correlationId: correlationId(request), errorCode: "safe_rendering_failed" }, "safe thread rendering failed");
     return reply.code(422).send({ code: "safe_rendering_failed", message: "This conversation could not be rendered safely.", retryable: true });
   }
+});
+
+app.post<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId/permissions/write/start", async (request, reply) => {
+  const user = await authenticatedUser(request);
+  if (!user) return reply.code(401).send({ code: "unauthenticated", message: "Sign in to request Gmail write permission." });
+  if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed", message: "Refresh the page and try again." });
+  const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
+  if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
+  if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before changing permissions.", retryable: false });
+  let state = ""; const verifier = randomBytes(64).toString("base64url"); let stored = false;
+  for (let attempt = 0; attempt < 3 && !stored; attempt++) { state = randomBytes(32).toString("base64url"); stored = (await redis.set(`write-oauth:${state}`, JSON.stringify({ userId: user.id, mailboxId: mailbox.id, capability: "gmail_write", verifier }), "EX", 600, "NX")) === "OK"; }
+  if (!stored) return reply.code(503).send({ code: "permission_state_unavailable", message: "We could not start permission setup. Try again shortly.", retryable: true });
+  await withTransaction(async (client) => { await client.query("INSERT INTO mailbox_permission_state(mailbox_account_id,write_capability,updated_at) VALUES($1,'upgrade_pending',now()) ON CONFLICT(mailbox_account_id) DO UPDATE SET write_capability='upgrade_pending',updated_at=now()", [mailbox.id]); await client.query("INSERT INTO audit_events(actor_type,actor_id,event_type,object_type,object_id,correlation_id) VALUES('user',$1,'gmail.write_permission_requested','mailbox_account',$2,$3)", [user.id, mailbox.id, correlationId(request)]); });
+  return { authorizationUrl: writeUpgradeAuthorizationUrl(config, state, challenge(verifier)) };
+});
+
+app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1/auth/google/write/callback", async (request, reply) => {
+  const user = await authenticatedUser(request); const { code, state, error } = request.query;
+  if (!state || !user) return reply.redirect(`${config.APP_ORIGIN}/?permission=expired`);
+  const stored = await redis.getdel(`write-oauth:${state}`);
+  if (!stored) return reply.redirect(`${config.APP_ORIGIN}/?permission=expired`);
+  let flow: { userId: string; mailboxId: string; capability: string; verifier: string };
+  try { flow = JSON.parse(stored); } catch { return reply.redirect(`${config.APP_ORIGIN}/?permission=expired`); }
+  if (flow.userId !== user.id || flow.capability !== "gmail_write" || !code && !error) return reply.redirect(`${config.APP_ORIGIN}/?permission=failed`);
+  const mailbox = await findMailboxForUser(flow.mailboxId, user.id);
+  if (!mailbox) return reply.redirect(`${config.APP_ORIGIN}/?permission=mismatch`);
+  if (error) { await pool.query("UPDATE mailbox_permission_state SET write_capability='upgrade_declined',updated_at=now() WHERE mailbox_account_id=$1", [mailbox.id]); return reply.redirect(`${config.APP_ORIGIN}/?permission=declined`); }
+  try {
+    const { tokens, profile } = await exchangeWriteUpgradeCode(config, code!, flow.verifier);
+    const scopes = tokens.scope?.split(" ").filter(Boolean) ?? [];
+    if (profile.emailAddress?.toLowerCase() !== mailbox.email_address.toLowerCase()) { await pool.query("UPDATE mailbox_permission_state SET write_capability='upgrade_failed',updated_at=now() WHERE mailbox_account_id=$1", [mailbox.id]); return reply.redirect(`${config.APP_ORIGIN}/?permission=mismatch`); }
+    if (!scopes.includes("https://www.googleapis.com/auth/gmail.modify") || !tokens.refresh_token) { await pool.query("UPDATE mailbox_permission_state SET write_capability='upgrade_failed',updated_at=now() WHERE mailbox_account_id=$1", [mailbox.id]); return reply.redirect(`${config.APP_ORIGIN}/?permission=failed`); }
+    await withTransaction(async (client) => { await client.query("UPDATE mailbox_accounts SET encrypted_refresh_token=$2,granted_scopes=$3 WHERE id=$1", [mailbox.id, encryptSecret(tokens.refresh_token!, config.TOKEN_ENCRYPTION_KEY_BASE64), scopes]); await client.query("INSERT INTO mailbox_permission_state(mailbox_account_id,write_capability,granted_scopes,updated_at) VALUES($1,'write_granted',$2,now()) ON CONFLICT(mailbox_account_id) DO UPDATE SET write_capability='write_granted',granted_scopes=$2,updated_at=now()", [mailbox.id, scopes]); await client.query("INSERT INTO audit_events(actor_type,actor_id,event_type,object_type,object_id,correlation_id) VALUES('user',$1,'gmail.write_permission_granted','mailbox_account',$2,$3)", [user.id, mailbox.id, correlationId(request)]); });
+    return reply.redirect(`${config.APP_ORIGIN}/?permission=success`);
+  } catch (cause) { if (isGmailProviderError(cause)) request.log.warn(sanitizeGmailProviderError(cause, { operation: "gmail_write_upgrade", mailboxId: mailbox.id, correlationId: correlationId(request) }), "gmail write upgrade failed"); else request.log.error({ mailboxId: mailbox.id, correlationId: correlationId(request), errorCode: "write_upgrade_failed" }, "gmail write upgrade failed"); await pool.query("UPDATE mailbox_permission_state SET write_capability='upgrade_failed',updated_at=now() WHERE mailbox_account_id=$1", [mailbox.id]); return reply.redirect(`${config.APP_ORIGIN}/?permission=failed`); }
 });
 
 app.delete<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId", async (request, reply) => {

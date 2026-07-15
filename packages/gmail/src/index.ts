@@ -13,6 +13,17 @@ export class GmailPaginationValidationError extends Error {
 export function createOAuthClient(config: AppConfig) {
   return new google.auth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, config.GOOGLE_REDIRECT_URI);
 }
+const writeScope = "https://www.googleapis.com/auth/gmail.modify";
+export function writeUpgradeAuthorizationUrl(config: AppConfig, state: string, codeChallenge: string) {
+  return new google.auth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, `${config.API_ORIGIN}/v1/auth/google/write/callback`).generateAuthUrl({ access_type: "offline", scope: [writeScope], state, code_challenge: codeChallenge, code_challenge_method: CodeChallengeMethod.S256, prompt: "consent", include_granted_scopes: false });
+}
+export async function exchangeWriteUpgradeCode(config: AppConfig, code: string, verifier: string) {
+  const client = new google.auth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, `${config.API_ORIGIN}/v1/auth/google/write/callback`);
+  const { tokens } = await client.getToken({ code, codeVerifier: verifier });
+  client.setCredentials(tokens);
+  const profile = await google.gmail({ version: "v1", auth: client }).users.getProfile({ userId: "me" });
+  return { tokens, profile: profile.data };
+}
 
 export function authorizationUrl(config: AppConfig, state: string, codeChallenge: string) {
   return createOAuthClient(config).generateAuthUrl({

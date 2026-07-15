@@ -23,6 +23,13 @@ function ConnectionBanner({ mailbox }: { mailbox: MailboxSummary }) {
   const health = connectionHealth(mailbox);
   return <section className={`health health--${health.tone}`} aria-live="polite"><div><strong>{health.title}</strong><p>{health.detail}</p></div>{health.tone === "attention" && <ConnectMailbox />}</section>;
 }
+function cookieValue(name: string) { return document.cookie.split("; ").find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1) ?? ""; }
+function WritePermission({ mailbox }: { mailbox: MailboxSummary }) {
+  const [state, setState] = useState<"idle" | "loading" | "failed">("idle");
+  if (mailbox.write_capability === "write_granted") return <p className="permission-note">Gmail write permission enabled.</p>;
+  const start = async () => { setState("loading"); try { const response = await fetch(`/v1/mailboxes/${mailbox.id}/permissions/write/start`, { method: "POST", credentials: "include", headers: { "x-csrf-token": cookieValue("aio_csrf") } }); const body = await response.json() as { authorizationUrl?: string }; if (!response.ok || !body.authorizationUrl) throw new Error(); location.assign(body.authorizationUrl); } catch { setState("failed"); } };
+  return <section className="permission-card"><strong>Enable Gmail actions</strong><p>Allows archive, mark unread, and creating, editing, and sending drafts. Nothing happens until you choose an action.</p>{state === "failed" && <p role="alert">We could not start permission setup. Try again.</p>}<button className="button" disabled={state === "loading"} onClick={() => void start()} type="button">{state === "loading" ? "Opening Google…" : "Review permissions"}</button></section>;
+}
 
 function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedView: string }) {
   return <aside className="sidebar" aria-label="Mailbox navigation">
@@ -36,7 +43,7 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
 function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   const { view = "inbox", threadId } = useParams();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader"><ThreadReader mailboxId={mailbox.id} threadId={threadId} /></aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader"><ThreadReader mailboxId={mailbox.id} threadId={threadId} /></aside></div></main></div>;
 }
 
 function App() {
