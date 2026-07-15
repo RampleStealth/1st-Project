@@ -86,28 +86,27 @@ app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/v1
     const { tokens, profile } = await exchangeCode(config, code, verifier);
     if (!profile.emailAddress || !profile.historyId || !tokens.refresh_token) throw new Error("Incomplete Gmail profile");
     const email = profile.emailAddress.toLowerCase();
-    const historyId = profile.historyId;
     const refreshToken = tokens.refresh_token;
     const sessionToken = randomBytes(48).toString("base64url");
     const expiresAt = new Date(Date.now() + 1_209_600_000);
     const mailbox = await withTransaction(async (client) => {
       const user = await client.query<{ id: string }>("INSERT INTO users(email_normalized) VALUES($1) ON CONFLICT(email_normalized) DO UPDATE SET deleted_at = NULL RETURNING id", [email]);
       const account = await client.query<{ id: string; encrypted_refresh_token: string }>(
-        `INSERT INTO mailbox_accounts(user_id, provider, provider_account_id, email_address, encrypted_refresh_token, granted_scopes, last_history_id)
-         VALUES($1, 'gmail', $2, $3, $4, $5, $6)
+        `INSERT INTO mailbox_accounts(user_id, provider, provider_account_id, email_address, encrypted_refresh_token, granted_scopes)
+         VALUES($1, 'gmail', $2, $3, $4, $5)
          ON CONFLICT(provider, provider_account_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, granted_scopes = EXCLUDED.granted_scopes, status = 'active', disconnected_at = NULL
          RETURNING id, encrypted_refresh_token`,
-        [user.rows[0].id, email, email, encryptSecret(refreshToken, config.TOKEN_ENCRYPTION_KEY_BASE64), tokens.scope?.split(" ") ?? [], historyId]
+        [user.rows[0].id, email, email, encryptSecret(refreshToken, config.TOKEN_ENCRYPTION_KEY_BASE64), tokens.scope?.split(" ") ?? []]
       );
       await client.query("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES($1, $2, $3)", [user.rows[0].id, hash(sessionToken), expiresAt]);
       await client.query("INSERT INTO audit_events(actor_type, actor_id, event_type, object_type, object_id, correlation_id) VALUES('user',$1,'gmail.connected','mailbox_account',$2,$3)", [user.rows[0].id, account.rows[0].id, correlationId(request)]);
       return account.rows[0];
     });
-    await ensureMailboxSyncState(mailbox.id, historyId);
+    await ensureMailboxSyncState(mailbox.id);
     let syncDelayed = false;
     try {
       const watch = await watchMailbox(gmailForMailbox(config, mailbox.encrypted_refresh_token), config.GOOGLE_PUBSUB_TOPIC);
-      await pool.query("UPDATE mailbox_accounts SET watch_expires_at=$2, last_history_id=$3,last_sync_error=NULL WHERE id=$1", [mailbox.id, watch.expiration ? new Date(Number(watch.expiration)) : null, watch.historyId ?? historyId]);
+      await pool.query("UPDATE mailbox_accounts SET watch_expires_at=$2,last_sync_error=NULL WHERE id=$1", [mailbox.id, watch.expiration ? new Date(Number(watch.expiration)) : null]);
     } catch (watchError) {
       syncDelayed = true;
       request.log.warn({ err: watchError, mailboxId: mailbox.id }, "gmail watch setup delayed");

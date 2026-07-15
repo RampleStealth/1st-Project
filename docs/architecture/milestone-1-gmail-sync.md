@@ -17,10 +17,12 @@ This release connects one Gmail account, synchronizes a bounded recent metadata 
 
 - Legacy mailbox watermarks are treated as untrusted. Existing mailbox accounts are reset to pending initial synchronization and must establish a fresh baseline before incremental history processing resumes.
 - Gmail `watch` is a trigger only; it is not the source of truth.
-- The worker records a notification's history ID as pending, then advances its applied history ID only after the exact Gmail history range has been persisted.
+- `mailbox_accounts.last_history_id` is a compatibility mirror written only after a successful state commit. It is never a resume checkpoint or baseline source.
+- The worker records a notification's history ID as pending, then advances its applied history ID only after the exact Gmail history range has been persisted in the same PostgreSQL transaction. Applied IDs advance monotonically; replaying an equal or older ID cannot regress the checkpoint.
+- A newly created sync-state row is empty and pending. Only `beginInitialSync` captures a trusted Gmail baseline. During recovery it clears the applied checkpoint but preserves pending notifications, prior success time, and failure code until the recovery transaction succeeds; the successful commit clears the failure code.
 - A mailbox with pending history newer than its applied history remains eligible for another sync pass, including when a competing worker holds the mailbox lease.
 - A 404 history gap enqueues a scoped full resync.
-- Watch renewal never advances the history checkpoint because doing so could skip mail changes.
+- Watch renewal never advances either history checkpoint because doing so could skip mail changes.
 - A PostgreSQL advisory lock serializes work per mailbox.
 - Job IDs, provider identifiers, and database unique constraints make retries idempotent.
 - Periodic reconciliation schedules an incremental sync even when no push notification is received.

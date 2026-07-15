@@ -1,8 +1,9 @@
 import { setInterval } from "node:timers";
 import { Worker } from "bullmq";
 import { loadConfig } from "@aio/config";
-import { findMailboxById, pool } from "@aio/database";
-import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure } from "@aio/database/repositories/mailbox-sync";
+import type { PoolClient } from "pg";
+import { findMailboxById, pool, withTransaction } from "@aio/database";
+import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
 import { changedMessageIds, classifyGmailError, currentHistoryId, getMessage, getThread, gmailForMailbox, initialThreadIds, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
@@ -40,11 +41,11 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
   return results;
 }
 
-async function persistThread(mailboxId: string, providerThread: Awaited<ReturnType<typeof getThread>>) {
+async function persistThread(client: PoolClient, mailboxId: string, providerThread: Awaited<ReturnType<typeof getThread>>) {
   if (!providerThread.id) return;
   const messages = providerThread.messages ?? [];
   const latest = messages.at(-1);
-  const thread = await pool.query<{ id: string }>(
+  const thread = await client.query<{ id: string }>(
     `INSERT INTO threads(mailbox_account_id, provider_thread_id, subject_normalized, participant_summary, last_message_at, unread_count, provider_labels)
      VALUES($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT(mailbox_account_id,provider_thread_id) DO UPDATE SET subject_normalized=EXCLUDED.subject_normalized,participant_summary=EXCLUDED.participant_summary,last_message_at=EXCLUDED.last_message_at,unread_count=EXCLUDED.unread_count,provider_labels=EXCLUDED.provider_labels,sync_version=threads.sync_version+1,updated_at=now()
@@ -53,7 +54,7 @@ async function persistThread(mailboxId: string, providerThread: Awaited<ReturnTy
   );
   for (const message of messages) {
     if (!message.id || !message.internalDate) continue;
-    await pool.query(
+    await client.query(
       `INSERT INTO messages(thread_id,provider_message_id,internal_timestamp,sent_at,from_address,snippet,provider_labels)
        VALUES($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT(thread_id,provider_message_id) DO UPDATE SET provider_labels=EXCLUDED.provider_labels`,
@@ -62,26 +63,32 @@ async function persistThread(mailboxId: string, providerThread: Awaited<ReturnTy
   }
 }
 
-async function syncThreadIds(mailboxId: string, gmail: ReturnType<typeof gmailForMailbox>, threadIds: string[]) {
+async function fetchThreads(gmail: ReturnType<typeof gmailForMailbox>, threadIds: string[]) {
   const threads = await mapWithConcurrency(threadIds, 5, async (threadId) => {
     try { return await getThread(gmail, threadId); }
     catch (error) { if (classifyGmailError(error, "resource") === "resource_deleted") return undefined; throw error; }
   });
-  for (const thread of threads) if (thread) await persistThread(mailboxId, thread);
+  return threads.filter((thread): thread is Awaited<ReturnType<typeof getThread>> => Boolean(thread));
 }
 
-async function applyHistoryChanges(mailboxId: string, gmail: ReturnType<typeof gmailForMailbox>, startHistoryId: string): Promise<string> {
+type HistoryBatch = { processedHistoryId: string; deletedMessageIds: string[]; threads: Awaited<ReturnType<typeof getThread>>[] };
+
+async function collectHistoryChanges(gmail: ReturnType<typeof gmailForMailbox>, startHistoryId: string): Promise<HistoryBatch> {
   const changes = await changedMessageIds(gmail, startHistoryId);
-  if (changes.deletedMessageIds.length) {
-    await pool.query("DELETE FROM messages USING threads WHERE messages.thread_id=threads.id AND threads.mailbox_account_id=$1 AND messages.provider_message_id = ANY($2)", [mailboxId, changes.deletedMessageIds]);
-    await pool.query("DELETE FROM threads WHERE mailbox_account_id=$1 AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.thread_id=threads.id)", [mailboxId]);
-  }
   const messageThreadIds = await mapWithConcurrency(changes.messageIds, 5, async (messageId) => {
     try { return (await getMessage(gmail, messageId)).threadId; }
     catch (error) { if (classifyGmailError(error, "resource") === "resource_deleted") return undefined; throw error; }
   });
-  await syncThreadIds(mailboxId, gmail, [...new Set(messageThreadIds.filter(Boolean) as string[])]);
-  return changes.latestHistoryId ?? startHistoryId;
+  const threads = await fetchThreads(gmail, [...new Set(messageThreadIds.filter(Boolean) as string[])]);
+  return { processedHistoryId: changes.latestHistoryId ?? startHistoryId, deletedMessageIds: changes.deletedMessageIds, threads };
+}
+
+async function persistHistoryBatch(client: PoolClient, mailboxId: string, batch: HistoryBatch) {
+  if (batch.deletedMessageIds.length) {
+    await client.query("DELETE FROM messages USING threads WHERE messages.thread_id=threads.id AND threads.mailbox_account_id=$1 AND messages.provider_message_id = ANY($2)", [mailboxId, batch.deletedMessageIds]);
+    await client.query("DELETE FROM threads WHERE mailbox_account_id=$1 AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.thread_id=threads.id)", [mailboxId]);
+  }
+  for (const thread of batch.threads) await persistThread(client, mailboxId, thread);
 }
 
 async function runInitialSync(mailboxId: string, gmail: ReturnType<typeof gmailForMailbox>, forceNewBaseline: boolean) {
@@ -89,22 +96,30 @@ async function runInitialSync(mailboxId: string, gmail: ReturnType<typeof gmailF
   if (!state) throw new Error(`Mailbox sync state missing for ${mailboxId}`);
   const baseline = forceNewBaseline || !state.initialBaselineHistoryId ? await currentHistoryId(gmail) : state.initialBaselineHistoryId;
   await beginInitialSync(mailboxId, baseline);
-  await syncThreadIds(mailboxId, gmail, await initialThreadIds(gmail, config.GMAIL_INITIAL_SYNC_LIMIT));
-  const processedHistoryId = await applyHistoryChanges(mailboxId, gmail, baseline);
-  state = await applyProcessedHistory(mailboxId, processedHistoryId, config.SYNC_RECONCILIATION_INTERVAL_MINUTES, true);
-  return state;
+  const initialThreads = await fetchThreads(gmail, await initialThreadIds(gmail, config.GMAIL_INITIAL_SYNC_LIMIT));
+  const historyBatch = await collectHistoryChanges(gmail, baseline);
+  const applied = await withTransaction(async (client) => {
+    for (const thread of initialThreads) await persistThread(client, mailboxId, thread);
+    await persistHistoryBatch(client, mailboxId, historyBatch);
+    return applyProcessedHistory(client, mailboxId, historyBatch.processedHistoryId, config.SYNC_RECONCILIATION_INTERVAL_MINUTES, true);
+  });
+  return applied.state;
 }
 
 async function runIncrementalSync(mailboxId: string, gmail: ReturnType<typeof gmailForMailbox>) {
   for (;;) {
     const state = await getMailboxSyncState(mailboxId);
     if (!state?.appliedHistoryId) return runInitialSync(mailboxId, gmail, false);
-    const processedHistoryId = await applyHistoryChanges(mailboxId, gmail, state.appliedHistoryId);
-    if (shouldRetryForUnavailableHistory(processedHistoryId, state.appliedHistoryId, state.pendingHistoryId)) {
+    const historyBatch = await collectHistoryChanges(gmail, state.appliedHistoryId);
+    if (shouldRetryForUnavailableHistory(historyBatch.processedHistoryId, state.appliedHistoryId, state.pendingHistoryId)) {
       throw new Error("Gmail notification is ahead of the available history range; retry required");
     }
-    const updatedState = await applyProcessedHistory(mailboxId, processedHistoryId, config.SYNC_RECONCILIATION_INTERVAL_MINUTES, false);
-    if (!hasUnprocessedPendingHistory(updatedState.pendingHistoryId, processedHistoryId)) return updatedState;
+    const applied = await withTransaction(async (client) => {
+      await persistHistoryBatch(client, mailboxId, historyBatch);
+      return applyProcessedHistory(client, mailboxId, historyBatch.processedHistoryId, config.SYNC_RECONCILIATION_INTERVAL_MINUTES, false);
+    });
+    const updatedState = applied.state;
+    if (!hasUnprocessedPendingHistory(updatedState.pendingHistoryId, updatedState.appliedHistoryId!)) return updatedState;
   }
 }
 
@@ -118,7 +133,7 @@ async function syncMailbox(job: SyncJob) {
   return withMailboxLease(job.mailboxAccountId, async () => {
     const mailbox = await findMailboxById(job.mailboxAccountId);
     if (!mailbox || mailbox.status !== "active") return;
-    await ensureMailboxSyncState(mailbox.id, mailbox.last_history_id);
+    await ensureMailboxSyncState(mailbox.id);
     const gmail = gmailForMailbox(config, mailbox.encrypted_refresh_token);
     try {
       const state = job.reason === "history_expired"
@@ -155,7 +170,16 @@ async function renewWatches() {
 
 async function scheduleReconciliation() {
   const mailboxIds = await claimDueReconciliations(100, config.SYNC_RECONCILIATION_INTERVAL_MINUTES);
-  await Promise.all(mailboxIds.map((mailboxAccountId) => enqueueSync({ mailboxAccountId, reason: "reconciliation" })));
+  await Promise.all(mailboxIds.map(async (mailboxAccountId) => {
+    try {
+      await enqueueSync({ mailboxAccountId, reason: "reconciliation" });
+    } catch (error) {
+      logger.error({ mailboxId: mailboxAccountId, err: error }, "reconciliation queue handoff failed; releasing claim");
+      await releaseReconciliationClaim(mailboxAccountId).catch((releaseError) => {
+        logger.error({ mailboxId: mailboxAccountId, err: releaseError }, "reconciliation claim release failed");
+      });
+    }
+  }));
 }
 
 setInterval(() => void renewWatches(), 12 * 60 * 60 * 1000).unref();
