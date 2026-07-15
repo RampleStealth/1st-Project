@@ -16,11 +16,13 @@ This release connects one Gmail account, synchronizes a bounded recent metadata 
 ## Sync correctness
 
 - Gmail `watch` is a trigger only; it is not the source of truth.
-- The worker uses a stored history checkpoint for incremental changes.
+- The worker records a notification's history ID as pending, then advances its applied history ID only after the exact Gmail history range has been persisted.
+- A mailbox with pending history newer than its applied history remains eligible for another sync pass, including when a competing worker holds the mailbox lease.
 - A 404 history gap enqueues a scoped full resync.
 - Watch renewal never advances the history checkpoint because doing so could skip mail changes.
 - A PostgreSQL advisory lock serializes work per mailbox.
 - Job IDs, provider identifiers, and database unique constraints make retries idempotent.
+- Periodic reconciliation schedules an incremental sync even when no push notification is received.
 
 ## Operations
 

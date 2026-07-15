@@ -9,9 +9,16 @@
 ## Sync failures
 
 - Inspect the redacted job correlation ID and checkpoint record.
+- Compare `mailbox_sync_state.applied_history_id` with `pending_history_id`; never manually advance either value.
 - Retry transient provider and network failures with the queue's backoff policy.
 - A Gmail history 404 requires a full metadata resync; it is expected recovery behavior, not data loss.
 - Do not manually advance `last_history_id`.
+
+## Reconciliation failures
+
+- Reconciliation runs independently of Gmail push delivery and claims due mailboxes with database locking.
+- If a mailbox has pending history newer than applied history, verify that a sync job exists or enqueue a reconciliation job; do not clear pending state.
+- A lease-contention retry is expected during busy mailbox activity. It becomes actionable only when queue retries are exhausted or sync freshness breaches its service objective.
 
 ## Pub/Sub failures
 
