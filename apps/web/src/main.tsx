@@ -42,8 +42,9 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
 
 function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   const { view = "inbox", threadId } = useParams();
+  const navigate = useNavigate();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader"><ThreadReader mailboxId={mailbox.id} threadId={threadId} /></aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader"><ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={()=>navigate(`/mail/${mailbox.id}/inbox`)} onUnread={()=>undefined} /></aside></div></main></div>;
 }
 
 function App() {

@@ -43,6 +43,7 @@ export function ThreadList({ mailboxId, view, selectedThreadId }: { mailboxId: s
   useEffect(() => {
     setCursor(null); setHistory([]); setPage(null); void load(null);
   }, [mailboxId, view]);
+  useEffect(()=>{const confirmed=(event:Event)=>{const detail=(event as CustomEvent<{threadId:string;action:"archive"|"mark-unread"}>).detail;if(!detail)return;setPage(current=>{if(!current)return current;if(detail.action==="archive"&&view==="inbox")return {...current,items:current.items.filter(item=>item.providerThreadId!==detail.threadId)};if(detail.action==="mark-unread")return {...current,items:current.items.map(item=>item.providerThreadId===detail.threadId?{...item,unreadCount:Math.max(1,item.unreadCount),labels:[...new Set([...item.labels,"UNREAD"])]}:item)};return current;});};window.addEventListener("aio:thread-command-confirmed",confirmed);return()=>window.removeEventListener("aio:thread-command-confirmed",confirmed);},[view]);
   const next = () => {
     if (!page?.nextCursor) return;
     setHistory((previous) => [...previous, cursor]);
