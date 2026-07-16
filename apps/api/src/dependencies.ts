@@ -12,6 +12,8 @@ export type ProductionDependencyFactories = {
   ensureMailboxSyncState: ApiAppDependencies["ensureMailboxSyncState"];
   recordPendingHistory: ApiAppDependencies["recordPendingHistory"];
   enqueueSync: ApiAppDependencies["enqueueSync"];
+  insertProviderCommand: ApiAppDependencies["insertProviderCommand"];
+  isIdempotencyConflictError: ApiAppDependencies["isIdempotencyConflictError"];
 };
 
 export type ProductionDependencyFactoryLoader = () => Promise<ProductionDependencyFactories>;
@@ -23,6 +25,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     { pool, withTransaction },
     { findMailboxForUser },
     { ensureMailboxSyncState, recordPendingHistory },
+    { insertProviderCommand, IdempotencyConflictError },
     { SanitizedThreadCache },
     { enqueueSync },
     { logger }
@@ -32,6 +35,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     import("@aio/database"),
     import("@aio/database/repositories/mailbox-account"),
     import("@aio/database/repositories/mailbox-sync"),
+    import("@aio/database/repositories/provider-command"),
     import("@aio/gmail"),
     import("@aio/jobs"),
     import("@aio/observability")
@@ -47,7 +51,9 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     findMailboxForUser,
     ensureMailboxSyncState,
     recordPendingHistory,
-    enqueueSync
+    enqueueSync,
+    insertProviderCommand,
+    isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError
   };
 }
 
@@ -68,7 +74,9 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       findMailboxForUser: factories.findMailboxForUser,
       ensureMailboxSyncState: factories.ensureMailboxSyncState,
       recordPendingHistory: factories.recordPendingHistory,
-      enqueueSync: factories.enqueueSync
+      enqueueSync: factories.enqueueSync,
+      insertProviderCommand: factories.insertProviderCommand,
+      isIdempotencyConflictError: factories.isIdempotencyConflictError
     };
   } catch (error) {
     if (redis) {

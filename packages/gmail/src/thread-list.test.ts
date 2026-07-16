@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GmailPaginationValidationError, listThreads, mapWithConcurrency, sanitizeGmailProviderError, threadListLabel } from "./index.js";
+import { archiveThread, classifyGmailMutationError, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -44,4 +44,14 @@ test("provider log sanitizer strips sensitive provider fields", () => {
   for (const secret of secretValues) assert.equal(serialized.includes(secret), false);
   assert.match(serialized, /reauthorization_required/);
   assert.match(serialized, /http_401/);
+});
+test("thread mutations use only fixed Gmail system labels", async () => { const calls: unknown[]=[]; const gmail={users:{threads:{modify:async (input:unknown)=>{calls.push(input);}}}}; await archiveThread(gmail as never,"thread"); await markThreadUnread(gmail as never,"thread"); assert.deepEqual(calls,[{userId:"me",id:"thread",requestBody:{removeLabelIds:["INBOX"]}},{userId:"me",id:"thread",requestBody:{addLabelIds:["UNREAD"]}}]); });
+
+test("mutation error classification is safe for retries, permissions, and uncertain outcomes", () => {
+  assert.equal(classifyGmailMutationError({ response: { status: 404, data: {} } }), "resource_deleted");
+  assert.equal(classifyGmailMutationError({ response: { status: 429, data: {} } }), "rate_limited");
+  assert.equal(classifyGmailMutationError({ response: { status: 503, data: {} } }), "transient_provider_failure");
+  assert.equal(classifyGmailMutationError({ response: { status: 401, data: {} } }), "reauthorization_required");
+  assert.equal(classifyGmailMutationError({ response: { status: 403, data: { message: "Request had insufficient authentication scopes." } } }), "write_scope_required");
+  assert.equal(classifyGmailMutationError({ request: { socket: {} } }), "uncertain_provider_outcome");
 });

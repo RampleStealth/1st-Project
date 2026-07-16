@@ -89,6 +89,31 @@ export async function getThread(gmail: gmail_v1.Gmail, id: string) {
 export async function getThreadFull(gmail: gmail_v1.Gmail, id: string) {
   return (await gmail.users.threads.get({ userId: "me", id, format: "full" })).data;
 }
+export async function archiveThread(gmail: gmail_v1.Gmail, id: string) { await gmail.users.threads.modify({ userId:"me", id, requestBody:{ removeLabelIds:["INBOX"] } }); }
+export async function markThreadUnread(gmail: gmail_v1.Gmail, id: string) { await gmail.users.threads.modify({ userId:"me", id, requestBody:{ addLabelIds:["UNREAD"] } }); }
+
+export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required" | "reauthorization_required" | "rate_limited" | "transient_provider_failure" | "uncertain_provider_outcome" | "unknown_provider_failure";
+
+/**
+ * Mutation failures are stricter than read failures: anything that may have
+ * reached Gmail without a definitive response is recovered for verification,
+ * never blindly retried.
+ */
+export function classifyGmailMutationError(error: unknown): GmailMutationErrorCode {
+  if (!error || typeof error !== "object") return "unknown_provider_failure";
+  const value = error as { code?: unknown; response?: { status?: unknown; data?: { error?: unknown; message?: unknown } }; request?: unknown };
+  const status = typeof value.code === "number" ? value.code : typeof value.response?.status === "number" ? value.response.status : undefined;
+  const providerError = typeof value.response?.data?.error === "string" ? value.response.data.error : "";
+  const message = typeof value.response?.data?.message === "string" ? value.response.data.message : "";
+  const scopeFailure = /insufficient.*(scope|permission)|insufficientpermissions/i.test(`${providerError} ${message}`);
+  if (status === 401 || providerError === "invalid_grant") return "reauthorization_required";
+  if (status === 403 && scopeFailure) return "write_scope_required";
+  if (status === 404) return "resource_deleted";
+  if (status === 429) return "rate_limited";
+  if (status && status >= 500) return "transient_provider_failure";
+  if (value.request) return "uncertain_provider_outcome";
+  return "unknown_provider_failure";
+}
 
 export function threadListLabel(view: MailboxView): string | undefined {
   if (view === "inbox") return "INBOX";

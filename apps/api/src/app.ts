@@ -16,6 +16,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerMailboxLifecycleRoutes } from "./routes/mailbox-lifecycle.js";
 import { registerMailboxWorkspaceRoutes } from "./routes/mailbox-workspace.js";
 import { registerProviderCommandRoutes } from "./routes/provider-commands.js";
+import { registerThreadMutationRoutes } from "./routes/thread-mutations.js";
 import { registerWritePermissionRoutes } from "./routes/permissions.js";
 
 export type ApiAppDependencies = {
@@ -30,6 +31,8 @@ export type ApiAppDependencies = {
   ensureMailboxSyncState: (mailboxAccountId: string) => Promise<unknown>;
   recordPendingHistory: (mailboxAccountId: string, historyId: string) => Promise<void>;
   enqueueSync: (job: SyncJob) => Promise<unknown>;
+  insertProviderCommand: (input: { mailboxId: string; commandType: "archive_thread" | "mark_thread_unread"; encryptedPayload: string; fingerprint: string; idempotencyKey: string }) => Promise<{ id: string; commandType: string; status: string }>;
+  isIdempotencyConflictError: (error: unknown) => boolean;
 };
 
 export async function createApiApp(dependencies: ApiAppDependencies) {
@@ -44,7 +47,9 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
     findMailboxForUser,
     ensureMailboxSyncState,
     recordPendingHistory,
-    enqueueSync
+    enqueueSync,
+    insertProviderCommand,
+    isIdempotencyConflictError
   } = dependencies;
   const app = Fastify({ loggerInstance: logger, trustProxy: config.NODE_ENV === "production" });
 
@@ -55,6 +60,7 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
   registerHealthRoutes(app);
   registerMailboxWorkspaceRoutes(app, { config, pool, withTransaction, sanitizedThreadCache, findMailboxForUser });
   registerProviderCommandRoutes(app, { pool });
+  registerThreadMutationRoutes(app, { config, pool, findMailboxForUser, insertProviderCommand, isIdempotencyConflictError });
   registerWritePermissionRoutes(app, { config, pool, redis, withTransaction, findMailboxForUser });
   registerMailboxLifecycleRoutes(app, { config, pool, withTransaction });
   registerAuthRoutes(app, { config, pool });

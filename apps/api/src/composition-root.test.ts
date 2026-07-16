@@ -48,7 +48,9 @@ function makeApiDependencies(events: string[] = []): ApiAppDependencies {
     findMailboxForUser: async () => null,
     ensureMailboxSyncState: async () => undefined,
     recordPendingHistory: async () => undefined,
-    enqueueSync: async () => undefined
+    enqueueSync: async () => undefined,
+    insertProviderCommand: async () => ({ id: "command", commandType: "archive_thread", status: "pending" }),
+    isIdempotencyConflictError: () => false
   };
 }
 
@@ -63,7 +65,9 @@ function makeFactories(events: string[], dependencies: ApiAppDependencies): Prod
     findMailboxForUser: dependencies.findMailboxForUser,
     ensureMailboxSyncState: dependencies.ensureMailboxSyncState,
     recordPendingHistory: dependencies.recordPendingHistory,
-    enqueueSync: dependencies.enqueueSync
+    enqueueSync: dependencies.enqueueSync,
+    insertProviderCommand: dependencies.insertProviderCommand,
+    isIdempotencyConflictError: dependencies.isIdempotencyConflictError
   };
 }
 
