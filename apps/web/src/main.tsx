@@ -46,7 +46,16 @@ function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   const { view = "inbox", threadId } = useParams();
   const navigate = useNavigate();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={() => window.dispatchEvent(new Event("aio:request-write-permission"))} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={()=>navigate(`/mail/${mailbox.id}/inbox`)} onUnread={()=>undefined} />}</aside></div></main></div>;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      if (event.key.toLowerCase() === "c" && selectedView === "drafts" && !threadId) { event.preventDefault(); document.querySelector<HTMLButtonElement>("[data-new-draft]")?.click(); }
+      if (event.key === "Escape" && threadId) { event.preventDefault(); navigate(`/mail/${mailbox.id}/${selectedView}`); }
+    };
+    window.addEventListener("keydown", onKeyDown); return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mailbox.id, navigate, selectedView, threadId]);
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={() => window.dispatchEvent(new Event("aio:request-write-permission"))} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={()=>navigate(`/mail/${mailbox.id}/inbox`)} onUnread={()=>undefined} />}</aside></div></main></div>;
 }
 
 function App() {

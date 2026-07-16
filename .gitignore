@@ -1,6 +1,7 @@
 node_modules/
 dist/
 runtime/
+gmail-validation-*.json
 .next/
 coverage/
 .env
