@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { decodeDisplayEntities } from "./display-text.js";
 import { readerFailureState, type ReaderState } from "./reader-state.js";
 import { readerIframePolicy, sandboxedDocument } from "./safe-iframe.js";
 
 type Message = { id: string; from: string | null; to: string[]; subject: string | null; sentAt: string | null; attachments: Array<{ filename: string; mimeType: string; size: number | null }>; plainText: string; sanitizedHtml: string | null; renderingState: "ready" | "fallback" | "failed" };
 type Thread = { id: string; messages: Message[] };
-type Command = { id: string; status: string; action: "archive" | "mark-unread" };
+type Command = { id: string; status: string; action: "archive" | "mark-unread"; threadId: string };
 
 function commandMessage(status: string) {
   if (status === "retryable") return "Retrying this Gmail action…";
@@ -25,25 +25,28 @@ export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, 
   const [thread, setThread] = useState<Thread | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [command, setCommand] = useState<Command | null>(null);
+  const emittedConfirmationId = useRef<string | null>(null);
   const subject = useMemo(() => decodeDisplayEntities(thread?.messages[0]?.subject) || "(No subject)", [thread]);
+  useEffect(() => { setCommand((current) => current?.threadId === threadId ? current : null); }, [threadId]);
   useEffect(() => {
     if (!command || ["succeeded", "failed", "recovery_required", "permission_required", "reauthorization_required"].includes(command.status)) return;
-    const timer = setTimeout(() => void fetch(`/v1/mailboxes/${mailboxId}/provider-commands/${command.id}`, { credentials: "include" }).then((response) => response.ok ? response.json() : null).then((value) => value && setCommand({ id: value.id, status: value.status, action: command.action })), 1000);
+    const timer = setTimeout(() => void fetch(`/v1/mailboxes/${mailboxId}/provider-commands/${command.id}`, { credentials: "include" }).then((response) => response.ok ? response.json() : null).then((value) => value && setCommand({ id: value.id, status: value.status, action: command.action, threadId: command.threadId })), 1000);
     return () => clearTimeout(timer);
   }, [command, mailboxId]);
   useEffect(() => {
-    if (command?.status !== "succeeded" || !threadId) return;
-    window.dispatchEvent(new CustomEvent("aio:thread-command-confirmed", { detail: { threadId, action: command.action } }));
-    if (command.action === "archive" && view === "inbox") onArchived?.();
-    if (command.action === "mark-unread") onUnread?.();
+    if (command?.status !== "succeeded" || emittedConfirmationId.current === command.id) return;
+    emittedConfirmationId.current = command.id;
+    window.dispatchEvent(new CustomEvent("aio:thread-command-confirmed", { detail: { threadId: command.threadId, action: command.action } }));
+    if (command.action === "archive" && view === "inbox" && threadId === command.threadId) onArchived?.();
+    if (command.action === "mark-unread" && threadId === command.threadId) onUnread?.();
   }, [command, onArchived, onUnread, threadId, view]);
   const mutate = async (action: "archive" | "mark-unread") => {
     if (!threadId || command) return;
     const csrf = document.cookie.split("; ").find((value) => value.startsWith("aio_csrf="))?.slice(9) ?? "";
     const response = await fetch(`/v1/mailboxes/${mailboxId}/threads/${threadId}/${action}`, { method: "POST", credentials: "include", headers: { "x-csrf-token": csrf, "idempotency-key": crypto.randomUUID() } });
     const body = await response.json().catch(() => null);
-    if (response.status === 409) { setCommand({ id: "", action, status: body?.code === "provider_reauthentication_required" ? "reauthorization_required" : "permission_required" }); return; }
-    if (response.ok) setCommand({ id: body.id, status: body.status, action });
+    if (response.status === 409) { setCommand({ id: "", action, threadId, status: body?.code === "provider_reauthentication_required" ? "reauthorization_required" : "permission_required" }); return; }
+    if (response.ok) setCommand({ id: body.id, status: body.status, action, threadId });
   };
   useEffect(() => {
     if (!threadId) { setState("idle"); setThread(null); return; }
