@@ -1,12 +1,13 @@
 import type { ProviderCommandType } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
+import type { LoadedClaimedCommand } from "@aio/database/repositories/provider-command";
 import type { gmail_v1 } from "googleapis";
 import type { PoolClient } from "pg";
 import type { GmailMutationErrorCode } from "@aio/gmail";
 
 type SupportedThreadCommand = Extract<ProviderCommandType, "archive_thread" | "mark_thread_unread">;
 type CommandClaim = { claimId: string; command: { mailboxAccountId: string; commandType: ProviderCommandType } };
-type LoadedCommand = { commandType: ProviderCommandType; payload: { providerThreadId: string } };
+type LoadedCommand = LoadedClaimedCommand;
 
 export class MissingThreadProjectionError extends Error {
   constructor() {
@@ -70,12 +71,18 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     const loaded = await dependencies.withTransaction((client) =>
       dependencies.loadClaimedCommand(client, commandId, claim.claimId, dependencies.encryptionKey)
     );
-    const commandType = loaded.commandType;
-    if (!isSupportedThreadCommand(commandType) || commandType !== claim.command.commandType) {
+    if (loaded.commandType !== "archive_thread" && loaded.commandType !== "mark_thread_unread") {
       return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "unsupported_command"))
         ? { outcome: "unsupported" as const }
         : { outcome: "stale" as const };
     }
+    const commandType = loaded.commandType;
+    if (commandType !== claim.command.commandType) {
+      return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "unsupported_command"))
+        ? { outcome: "unsupported" as const }
+        : { outcome: "stale" as const };
+    }
+    const providerThreadId = loaded.payload.providerThreadId;
 
     const mailbox = await dependencies.findMailboxById(claim.command.mailboxAccountId);
     if (!mailbox) {
@@ -85,15 +92,15 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     }
 
     const gmail = dependencies.gmailForMailbox(mailbox);
-    if (commandType === "archive_thread") await dependencies.archiveThread(gmail, loaded.payload.providerThreadId);
-    else await dependencies.markThreadUnread(gmail, loaded.payload.providerThreadId);
+    if (commandType === "archive_thread") await dependencies.archiveThread(gmail, providerThreadId);
+    else await dependencies.markThreadUnread(gmail, providerThreadId);
 
     await dependencies.withTransaction((client) =>
       dependencies.completeConfirmedMutation(
         client,
         commandId,
         claim.claimId,
-        () => applyConfirmedThreadProjection(client, mailbox.id, loaded.payload.providerThreadId, commandType),
+        () => applyConfirmedThreadProjection(client, mailbox.id, providerThreadId, commandType),
         commandType
       )
     );

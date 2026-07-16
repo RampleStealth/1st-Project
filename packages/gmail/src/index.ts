@@ -4,6 +4,7 @@ import type { AppConfig } from "@aio/config";
 import { decryptSecret } from "@aio/security";
 import type { MailboxView, SyncErrorCode } from "@aio/contracts";
 export * from "./thread-display.js";
+export * from "./draft-mime.js";
 
 const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
 export class GmailPaginationValidationError extends Error {

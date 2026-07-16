@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { createDraftPayloadSchema, sendDraftPayloadSchema, updateDraftPayloadSchema } from "./drafts.js";
+export * from "./drafts.js";
 
 export const mailboxStatusSchema = z.enum(["active", "reauthorization_required", "disconnected", "sync_failed"]);
 export type MailboxStatus = z.infer<typeof mailboxStatusSchema>;
@@ -7,6 +9,24 @@ export type MailboxWriteCapability = z.infer<typeof mailboxWriteCapabilitySchema
 export const providerCommandTypeSchema = z.enum(["archive_thread","mark_thread_unread","create_draft","update_draft","send_draft"]);
 export const providerCommandStatusSchema = z.enum(["pending","running","succeeded","failed","retryable","recovery_required"]);
 export type ProviderCommandType = z.infer<typeof providerCommandTypeSchema>; export type ProviderCommandStatus = z.infer<typeof providerCommandStatusSchema>;
+
+const legacyThreadPayloadSchema = z.object({ providerThreadId: z.string().min(1) }).strict();
+type PayloadDefinition<T extends z.ZodTypeAny> = { version: number; schema: T; parse: (value: unknown) => z.output<T> };
+function definePayload<T extends z.ZodTypeAny>(version: number, schema: T): PayloadDefinition<T> {
+  return { version, schema, parse: (value) => schema.parse(value) };
+}
+/** A total registry prevents command payload validation from becoming a growing switch. */
+export const providerCommandPayloadDefinitions = {
+  archive_thread: definePayload(0, legacyThreadPayloadSchema),
+  mark_thread_unread: definePayload(0, legacyThreadPayloadSchema),
+  create_draft: definePayload(1, createDraftPayloadSchema),
+  update_draft: definePayload(1, updateDraftPayloadSchema),
+  send_draft: definePayload(1, sendDraftPayloadSchema)
+} satisfies Record<ProviderCommandType, PayloadDefinition<z.ZodTypeAny>>;
+
+export type ProviderCommandPayload = {
+  [T in ProviderCommandType]: { commandType: T; payload: z.output<(typeof providerCommandPayloadDefinitions)[T]["schema"]> }
+}[ProviderCommandType];
 
 export const gmailNotificationSchema = z.object({
   emailAddress: z.string().email(),
