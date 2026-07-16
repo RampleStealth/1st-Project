@@ -78,7 +78,18 @@ test("draft reads are owner-scoped, decrypt after ownership, and expose no stora
   const fixture = await makeApp(); const create = await fixture.app.inject({ method: "POST", url: `/v1/mailboxes/${mailboxId}/drafts`, headers: fixture.headers(), payload: input }); const draftId = create.json().draftId;
   const other = await fixture.app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/drafts/${draftId}`, headers: { cookie: `aio_session=${fixture.other}` } }); assert.equal(other.statusCode, 404);
   const read = await fixture.app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/drafts/${draftId}`, headers: { cookie: fixture.headers().cookie } }); assert.equal(read.statusCode, 200); assert.deepEqual(read.json().to, input.to);
+  assert.equal(read.json().canVerifySend, false);
   for (const internal of ["encrypted", "fingerprint", "gmailDraftId", "lastCommandId"]) assert.equal(JSON.stringify(read.json()).includes(internal), false);
+  await fixture.app.close();
+});
+
+test("recovered send drafts expose only a safe verification capability", async () => {
+  const fixture = await makeApp({ recoveryCommand: { id: "send-command", status: "recovery_required" } });
+  const created = await fixture.app.inject({ method: "POST", url: `/v1/mailboxes/${mailboxId}/drafts`, headers: fixture.headers(), payload: input });
+  fixture.getDraft().status = "recovery_required";
+  const read = await fixture.app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/drafts/${created.json().draftId}`, headers: { cookie: fixture.headers().cookie } });
+  assert.equal(read.json().canVerifySend, true);
+  assert.equal(JSON.stringify(read.json()).includes("send-command"), false);
   await fixture.app.close();
 });
 
@@ -131,7 +142,10 @@ test("confirmed ready drafts create one encrypted minimal send command and rejec
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, cookie: `aio_session=${fixture.other}; aio_csrf=csrf` } })).statusCode, 404);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "x-csrf-token": "wrong" } })).statusCode, 403);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "if-match": "2" } })).statusCode, 400);
-  const accepted = await fixture.app.inject({ method: "POST", url, headers, payload: { gmailDraftId: "attacker", labels: ["TRASH"], recipients: ["attacker@example.test"] } });
+  const rejectedBody = await fixture.app.inject({ method: "POST", url, headers, payload: { gmailDraftId: "attacker", labels: ["TRASH"], recipients: ["attacker@example.test"] } });
+  assert.deepEqual(rejectedBody.json(), { code: "invalid_draft_send_request" });
+  assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "content-type": "application/json" }, payload: "null" })).json(), { code: "invalid_draft_send_request" });
+  const accepted = await fixture.app.inject({ method: "POST", url, headers });
   assert.equal(accepted.statusCode, 202);
   assert.deepEqual(Object.keys(accepted.json()).sort(), ["commandType", "draftId", "id", "revision", "status"]);
   const captured = fixture.captured.at(-1);
@@ -153,6 +167,7 @@ test("send verification is owner-scoped, CSRF-protected, and only queues the ori
   assert.equal((await fixture.app.inject({ method: "POST", url })).statusCode, 401);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, cookie: `aio_session=${fixture.other}; aio_csrf=csrf` } })).statusCode, 409);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "x-csrf-token": "wrong" } })).statusCode, 403);
+  assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers, payload: { commandType: "send_draft" } })).json(), { code: "invalid_draft_verification_request" });
   assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers })).json(), { id: "send-command", status: "verification_pending" });
   const unavailable = await makeApp({ draft });
   const { ["content-type"]: _unavailableContentType, ...unavailableHeaders } = unavailable.headers();

@@ -65,4 +65,17 @@ describe("draft composer", () => {
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Unsaved" } });
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
   });
+  it("keeps a reloaded recovered send out of the ready state and offers only verification", async () => {
+    const recovered = { ...readyDraft, status: "recovery_required", canVerifySend: true };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ id: "create", draftId: "draft", status: "succeeded" }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => recovered } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ id: "send-recovery", status: "verification_pending" }) } as Response);
+    openComposer(); fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+    expect(await screen.findByText(/will not be resent automatically/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check Gmail status" }));
+    expect(await screen.findByText("Checking Gmail status...")).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenLastCalledWith("/v1/mailboxes/mailbox/drafts/draft/send-verification", expect.objectContaining({ method: "POST" }));
+  });
 });

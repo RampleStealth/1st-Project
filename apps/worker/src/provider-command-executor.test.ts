@@ -314,6 +314,44 @@ test("execution markers reject stale claims and make post-provider failures reco
   } finally { await data.cleanup(); }
 });
 
+test("expired draft claims cannot load encrypted draft state or reach Gmail", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const expireAfterClaimValidation = async (...args: Parameters<typeof loadClaimedCommand>) => {
+      const loaded = await loadClaimedCommand(...args);
+      await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [args[1]]);
+      return loaded;
+    };
+
+    const created = await createDraftCommand(data.mailboxId);
+    let createCalled = false;
+    assert.deepEqual(await executeProviderCommand(created.id, executor({
+      loadClaimedCommand: expireAfterClaimValidation,
+      loadDraftForCreation,
+      createDraft: async () => { createCalled = true; return { draftId: "unexpected", messageId: "unexpected", threadId: null }; }
+    })), { outcome: "stale" });
+    assert.equal(createCalled, false);
+
+    const updated = await updateDraftCommand(data.mailboxId);
+    let updatePreflightCalled = false;
+    assert.deepEqual(await executeProviderCommand(updated.id, executor({
+      loadClaimedCommand: expireAfterClaimValidation,
+      loadDraftForUpdate,
+      getDraft: async () => { updatePreflightCalled = true; return { draftId: updated.gmailDraftId, messageId: updated.gmailMessageId, threadId: updated.gmailThreadId }; }
+    })), { outcome: "stale" });
+    assert.equal(updatePreflightCalled, false);
+
+    const sent = await sendDraftCommand(data.mailboxId);
+    let sendPreflightCalled = false;
+    assert.deepEqual(await executeProviderCommand(sent.id, executor({
+      loadClaimedCommand: expireAfterClaimValidation,
+      loadDraftForSend,
+      getDraft: async () => { sendPreflightCalled = true; return { draftId: sent.gmailDraftId, messageId: sent.gmailMessageId, threadId: null }; }
+    })), { outcome: "stale" });
+    assert.equal(sendPreflightCalled, false);
+  } finally { await data.cleanup(); }
+});
+
 function recoveryExecutor(overrides: Partial<Parameters<typeof verifyCreateDraftRecovery>[1]> = {}) {
   return {
     claimCreateDraftRecovery,
