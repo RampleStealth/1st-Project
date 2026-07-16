@@ -33,6 +33,8 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
   return results;
 }
 
+const outboxDispatchConcurrency = 5;
+
 type HistoryBatch = { processedHistoryId: string; deletedMessageIds: string[]; threads: Awaited<ReturnType<typeof getThread>>[] };
 
 export function createWorkerServices(config: AppConfig): WorkerRuntimeServices {
@@ -101,11 +103,18 @@ export function createWorkerServices(config: AppConfig): WorkerRuntimeServices {
     },
     dispatchCommandOutbox: async (limit) => {
       const claimed = await claimOutboxEvents(limit); metrics().gauge("unpublished_outbox", claimed.events.length);
-      for (const event of claimed.events) try {
-        const command = await pool.query<{ command_type: import("@aio/contracts").ProviderCommandType; correlation_id: string }>("SELECT command_type,correlation_id FROM provider_commands WHERE id=$1", [event.aggregate_id]);
-        if (!command.rowCount) { await releaseOutboxClaim(event.id, claimed.claimId); continue; }
-        await enqueueProviderCommand(event.aggregate_id, command.rows[0].command_type, command.rows[0].correlation_id); await markOutboxPublished(event.id, claimed.claimId); metrics().counter("queue_enqueues_total", 1, { queue: "commands", result: "success" });
-      } catch { await releaseOutboxClaim(event.id, claimed.claimId); metrics().counter("queue_enqueues_total", 1, { queue: "commands", result: "failure" }); logger.warn({ errorCode: "command_outbox_enqueue_failed", operation: "command_outbox_dispatch" }, "provider command outbox enqueue failed"); }
+      await mapWithConcurrency(claimed.events, outboxDispatchConcurrency, async (event) => {
+        try {
+          if (!event.command_type || !event.correlation_id) { await releaseOutboxClaim(event.id, claimed.claimId); return; }
+          await enqueueProviderCommand(event.aggregate_id, event.command_type, event.correlation_id);
+          const published = await markOutboxPublished(event.id, claimed.claimId);
+          metrics().counter("queue_enqueues_total", 1, { queue: "commands", result: published ? "success" : "lost_claim" });
+        } catch {
+          await releaseOutboxClaim(event.id, claimed.claimId);
+          metrics().counter("queue_enqueues_total", 1, { queue: "commands", result: "failure" });
+          logger.warn({ errorCode: "command_outbox_enqueue_failed", operation: "command_outbox_dispatch" }, "provider command outbox enqueue failed");
+        }
+      });
     },
     recoverExpiredCommandLeases: async () => { await recoverExpiredLeases(); },
     renewWatches: async () => {

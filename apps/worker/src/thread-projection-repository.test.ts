@@ -30,6 +30,20 @@ test("thread projection upserts are idempotent and refresh list metadata", { ski
   } finally { await pool.query("DELETE FROM users WHERE id=$1", [data.userId]); }
 });
 
+test("unchanged thread metadata does not advance the projection version", { skip: !databaseAvailable }, async () => {
+  const data = await fixture();
+  const providerThread = { id: "stable-provider-thread", messages: [{ id: "stable-message", internalDate: "1700000000000", labelIds: ["INBOX"], snippet: "Stable preview", payload: { headers: [{ name: "From", value: "Sender <sender@example.test>" }, { name: "Subject", value: "Stable subject" }] } }] };
+  try {
+    const initial = await withTransaction((client) => upsertThreadProjection(client, data.mailboxId, providerThread));
+    assert.ok(initial);
+    const before = await pool.query<{ sync_version: string }>("SELECT sync_version FROM threads WHERE id=$1", [initial.id]);
+    const repeat = await withTransaction((client) => upsertThreadProjection(client, data.mailboxId, providerThread));
+    const after = await pool.query<{ sync_version: string }>("SELECT sync_version FROM threads WHERE id=$1", [initial.id]);
+    assert.equal(repeat?.id, initial.id);
+    assert.equal(after.rows[0].sync_version, before.rows[0].sync_version);
+  } finally { await pool.query("DELETE FROM users WHERE id=$1", [data.userId]); }
+});
+
 test("mailbox lookup is scoped to its owner", { skip: !databaseAvailable }, async () => {
   const data = await fixture();
   const other = await pool.query<{ id: string }>("INSERT INTO users(email_normalized) VALUES($1) RETURNING id", [`other-${randomUUID()}@example.test`]);
