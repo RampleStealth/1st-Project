@@ -9,7 +9,8 @@
     "./repositories/thread-projection": "./src/repositories/thread-projection-repository.ts",
     "./repositories/mailbox-account": "./src/repositories/mailbox-account-repository.ts",
     "./repositories/provider-command": "./src/repositories/provider-command.ts",
-    "./repositories/draft": "./src/repositories/draft-repository.ts"
+    "./repositories/draft": "./src/repositories/draft-repository.ts",
+    "./repositories/worker-runtime": "./src/repositories/worker-runtime-repository.ts"
   },
   "scripts": {
     "db:migrate": "tsx src/migrate.ts"
