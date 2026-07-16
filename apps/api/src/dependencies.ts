@@ -14,8 +14,12 @@ export type ProductionDependencyFactories = {
   enqueueSync: ApiAppDependencies["enqueueSync"];
   insertProviderCommand: ApiAppDependencies["insertProviderCommand"];
   createDraftWithCommand: ApiAppDependencies["createDraftWithCommand"];
+  updateDraftWithCommand: ApiAppDependencies["updateDraftWithCommand"];
   findDraftForUser: ApiAppDependencies["findDraftForUser"];
   isIdempotencyConflictError: ApiAppDependencies["isIdempotencyConflictError"];
+  isDraftRevisionConflictError: ApiAppDependencies["isDraftRevisionConflictError"];
+  isDraftStateConflictError: ApiAppDependencies["isDraftStateConflictError"];
+  isActiveDraftCommandError: ApiAppDependencies["isActiveDraftCommandError"];
 };
 
 export type ProductionDependencyFactoryLoader = () => Promise<ProductionDependencyFactories>;
@@ -28,7 +32,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     { findMailboxForUser },
     { ensureMailboxSyncState, recordPendingHistory },
     { insertProviderCommand, IdempotencyConflictError },
-    { createDraftWithCommand, findDraftForUser },
+    { createDraftWithCommand, updateDraftWithCommand, findDraftForUser, DraftRevisionConflictError, DraftStateConflictError, ActiveDraftCommandError },
     { SanitizedThreadCache },
     { enqueueSync },
     { logger }
@@ -58,8 +62,12 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     enqueueSync,
     insertProviderCommand,
     createDraftWithCommand,
+    updateDraftWithCommand,
     findDraftForUser,
-    isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError
+    isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError,
+    isDraftRevisionConflictError: (error) => error instanceof DraftRevisionConflictError,
+    isDraftStateConflictError: (error) => error instanceof DraftStateConflictError,
+    isActiveDraftCommandError: (error) => error instanceof ActiveDraftCommandError
   };
 }
 
@@ -83,8 +91,12 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       enqueueSync: factories.enqueueSync,
       insertProviderCommand: factories.insertProviderCommand,
       createDraftWithCommand: factories.createDraftWithCommand,
+      updateDraftWithCommand: factories.updateDraftWithCommand,
       findDraftForUser: factories.findDraftForUser,
-      isIdempotencyConflictError: factories.isIdempotencyConflictError
+      isIdempotencyConflictError: factories.isIdempotencyConflictError,
+      isDraftRevisionConflictError: factories.isDraftRevisionConflictError,
+      isDraftStateConflictError: factories.isDraftStateConflictError,
+      isActiveDraftCommandError: factories.isActiveDraftCommandError
     };
   } catch (error) {
     if (redis) {

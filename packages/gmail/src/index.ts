@@ -103,6 +103,14 @@ export async function createDraft(gmail: gmail_v1.Gmail, mime: string): Promise<
   return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
 }
 
+/** Replaces only the specified Gmail Draft resource with application-built MIME. */
+export async function updateDraft(gmail: gmail_v1.Gmail, draftId: string, mime: string): Promise<GmailDraftReference> {
+  const response = await gmail.users.drafts.update({ userId: "me", id: draftId, requestBody: { message: { raw: Buffer.from(mime, "utf8").toString("base64url") } } });
+  const data = response.data;
+  if (!data.id || !data.message?.id) throw new Error("Gmail did not confirm an updated draft identifier");
+  return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
+}
+
 /** Metadata-only lookup; raw MIME and draft bodies are deliberately never requested. */
 export async function getDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<GmailDraftReference> {
   const response = await gmail.users.drafts.get({ userId: "me", id: draftId, format: "metadata" });

@@ -34,8 +34,12 @@ export type ApiAppDependencies = {
   enqueueSync: (job: SyncJob) => Promise<unknown>;
   insertProviderCommand: (input: { mailboxId: string; commandType: "archive_thread" | "mark_thread_unread"; encryptedPayload: string; fingerprint: string; idempotencyKey: string }) => Promise<{ id: string; commandType: string; status: string }>;
   createDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
+  updateDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
   findDraftForUser: (mailboxId: string, draftId: string, userId: string) => Promise<any | null>;
   isIdempotencyConflictError: (error: unknown) => boolean;
+  isDraftRevisionConflictError: (error: unknown) => boolean;
+  isDraftStateConflictError: (error: unknown) => boolean;
+  isActiveDraftCommandError: (error: unknown) => boolean;
 };
 
 export async function createApiApp(dependencies: ApiAppDependencies) {
@@ -53,20 +57,24 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
     enqueueSync,
     insertProviderCommand,
     createDraftWithCommand,
+    updateDraftWithCommand,
     findDraftForUser,
-    isIdempotencyConflictError
+    isIdempotencyConflictError,
+    isDraftRevisionConflictError,
+    isDraftStateConflictError,
+    isActiveDraftCommandError
   } = dependencies;
   const app = Fastify({ loggerInstance: logger, trustProxy: config.NODE_ENV === "production" });
 
   await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
-  await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods: ["GET", "POST", "DELETE"] });
+  await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods: ["GET", "POST", "PUT", "DELETE"] });
 
   app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
   registerHealthRoutes(app);
   registerMailboxWorkspaceRoutes(app, { config, pool, withTransaction, sanitizedThreadCache, findMailboxForUser });
   registerProviderCommandRoutes(app, { pool });
   registerThreadMutationRoutes(app, { config, pool, findMailboxForUser, insertProviderCommand, isIdempotencyConflictError });
-  registerDraftRoutes(app, { config, pool, findMailboxForUser, createDraftWithCommand, findDraftForUser, isIdempotencyConflictError });
+  registerDraftRoutes(app, { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, findDraftForUser, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError });
   registerWritePermissionRoutes(app, { config, pool, redis, withTransaction, findMailboxForUser });
   registerMailboxLifecycleRoutes(app, { config, pool, withTransaction });
   registerAuthRoutes(app, { config, pool });

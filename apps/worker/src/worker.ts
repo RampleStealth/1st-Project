@@ -4,14 +4,14 @@ import { loadConfig } from "@aio/config";
 import { findMailboxById, pool, withTransaction, type MailboxAccount } from "@aio/database";
 import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailProviderError, watchMailbox } from "@aio/gmail";
+import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, getDraft, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailProviderError, updateDraft, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueProviderCommand, enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
 import { hasUnprocessedPendingHistory, shouldRetryForUnavailableHistory } from "./sync-state.js";
-import { claimCommand, claimCreateDraftRecovery, claimOutboxEvents, completeClaim, completeConfirmedMutation, completeRecoveredDraftCreation, loadClaimedCommand, markOutboxPublished, markProviderExecutionStarted, recoverExpiredLeases, releaseCreateDraftRecoveryClaim, releaseOutboxClaim, scheduleRetryFromClaim, StaleCommandClaimError } from "@aio/database/repositories/provider-command";
-import { executeProviderCommand, verifyCreateDraftRecovery } from "./provider-command-executor.js";
-import { confirmDraftCreation, loadDraftForCreation, loadDraftForRecovery } from "@aio/database/repositories/draft";
+import { claimCommand, claimCreateDraftRecovery, claimOutboxEvents, claimUpdateDraftRecovery, completeClaim, completeConfirmedMutation, completeFailedMutation, completeRecoveredDraftCreation, loadClaimedCommand, markOutboxPublished, markProviderExecutionStarted, recoverExpiredLeases, releaseCreateDraftRecoveryClaim, releaseOutboxClaim, releaseUpdateDraftRecoveryClaim, scheduleRetryFromClaim, StaleCommandClaimError } from "@aio/database/repositories/provider-command";
+import { executeProviderCommand, verifyCreateDraftRecovery, verifyUpdateDraftRecovery } from "./provider-command-executor.js";
+import { confirmDraftCreation, confirmDraftUpdate, loadDraftForCreation, loadDraftForRecovery, loadDraftForUpdate, loadDraftForUpdateRecovery, markDraftConflict } from "@aio/database/repositories/draft";
 
 const config = loadConfig();
 const commandDependencies = {
@@ -25,9 +25,15 @@ const commandDependencies = {
   loadDraftForCreation,
   createDraft,
   confirmDraftCreation,
+  loadDraftForUpdate,
+  getDraft,
+  updateDraft,
+  confirmDraftUpdate,
+  markDraftConflict,
   markProviderExecutionStarted,
   withTransaction,
   completeConfirmedMutation,
+  completeFailedMutation,
   scheduleRetryFromClaim,
   completeClaim,
   classifyGmailMutationError,
@@ -35,7 +41,9 @@ const commandDependencies = {
 };
 const commandWorker = new Worker("gmail-commands", async (job) => job.name === "verify-create-draft"
   ? verifyCreateDraftRecovery(job.data.commandId, { ...commandDependencies, claimCreateDraftRecovery, releaseCreateDraftRecoveryClaim, completeRecoveredDraftCreation, loadDraftForRecovery, findDraftByRfc822MessageId })
-  : executeProviderCommand(job.data.commandId, commandDependencies), { connection: { url: config.REDIS_URL, maxRetriesPerRequest: null } });
+  : job.name === "verify-update-draft"
+    ? verifyUpdateDraftRecovery(job.data.commandId, { ...commandDependencies, claimUpdateDraftRecovery, releaseUpdateDraftRecoveryClaim, loadDraftForUpdateRecovery })
+    : executeProviderCommand(job.data.commandId, commandDependencies), { connection: { url: config.REDIS_URL, maxRetriesPerRequest: null } });
 async function dispatchCommandOutbox() {
   const claimed = await claimOutboxEvents();
   for (const event of claimed.events) { try { const command = await pool.query<{ command_type: import("@aio/contracts").ProviderCommandType }>("SELECT command_type FROM provider_commands WHERE id=$1", [event.aggregate_id]); if (!command.rowCount) { await releaseOutboxClaim(event.id, claimed.claimId); continue; } await enqueueProviderCommand(event.aggregate_id, command.rows[0].command_type); await markOutboxPublished(event.id, claimed.claimId); } catch (error) { await releaseOutboxClaim(event.id, claimed.claimId); logger.warn({ eventId: event.id, errorCode: "command_outbox_enqueue_failed" }, "provider command outbox enqueue failed"); } }

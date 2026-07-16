@@ -51,8 +51,12 @@ function makeApiDependencies(events: string[] = []): ApiAppDependencies {
     enqueueSync: async () => undefined,
     insertProviderCommand: async () => ({ id: "command", commandType: "archive_thread", status: "pending" }),
     createDraftWithCommand: async () => ({ id: "draft-command", commandType: "create_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
+    updateDraftWithCommand: async () => ({ id: "draft-command", commandType: "update_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
     findDraftForUser: async () => null,
-    isIdempotencyConflictError: () => false
+    isIdempotencyConflictError: () => false,
+    isDraftRevisionConflictError: () => false,
+    isDraftStateConflictError: () => false,
+    isActiveDraftCommandError: () => false
   };
 }
 
@@ -70,8 +74,12 @@ function makeFactories(events: string[], dependencies: ApiAppDependencies): Prod
     enqueueSync: dependencies.enqueueSync,
     insertProviderCommand: dependencies.insertProviderCommand,
     createDraftWithCommand: dependencies.createDraftWithCommand,
+    updateDraftWithCommand: dependencies.updateDraftWithCommand,
     findDraftForUser: dependencies.findDraftForUser,
-    isIdempotencyConflictError: dependencies.isIdempotencyConflictError
+    isIdempotencyConflictError: dependencies.isIdempotencyConflictError,
+    isDraftRevisionConflictError: dependencies.isDraftRevisionConflictError,
+    isDraftStateConflictError: dependencies.isDraftStateConflictError,
+    isActiveDraftCommandError: dependencies.isActiveDraftCommandError
   };
 }
 
@@ -102,6 +110,7 @@ test("application factory imports without startup side effects and registers the
     ["GET", "/v1/mailboxes/:mailboxId/threads/:threadId"],
     ["POST", "/v1/mailboxes/:mailboxId/drafts"],
     ["GET", "/v1/mailboxes/:mailboxId/drafts/:draftId"],
+    ["PUT", "/v1/mailboxes/:mailboxId/drafts/:draftId"],
     ["DELETE", "/v1/mailboxes/:mailboxId"],
     ["GET", "/v1/mailboxes/:mailboxId/provider-commands/:commandId"]
   ] as const) assert.equal(app.hasRoute({ method, url }), true, `${method} ${url}`);

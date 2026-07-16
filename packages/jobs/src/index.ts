@@ -7,10 +7,12 @@ export const syncQueue = new Queue<SyncJob, void, "sync-mailbox">("gmail-sync", 
   defaultJobOptions: { attempts: 8, backoff: { type: "exponential", delay: 1_000 }, removeOnComplete: 1_000, removeOnFail: 5_000 }
 });
 export type GmailCommandJob = { commandId: string; commandType: ProviderCommandType };
-export const gmailCommandsQueue = new Queue<GmailCommandJob, void, "execute-command" | "verify-create-draft">("gmail-commands", { connection: { url: process.env.REDIS_URL ?? "", maxRetriesPerRequest: null }, defaultJobOptions: { attempts: 1, removeOnComplete: 1_000, removeOnFail: 5_000 } });
+export const gmailCommandsQueue = new Queue<GmailCommandJob, void, "execute-command" | "verify-create-draft" | "verify-update-draft">("gmail-commands", { connection: { url: process.env.REDIS_URL ?? "", maxRetriesPerRequest: null }, defaultJobOptions: { attempts: 1, removeOnComplete: 1_000, removeOnFail: 5_000 } });
 export async function enqueueProviderCommand(commandId: string, commandType: ProviderCommandType) { return gmailCommandsQueue.add("execute-command", { commandId, commandType }, { jobId: commandId }); }
 /** Explicit operator/user-triggered read-only verification; never an automatic create retry. */
 export async function enqueueCreateDraftVerification(commandId: string) { return gmailCommandsQueue.add("verify-create-draft", { commandId, commandType: "create_draft" }, { jobId: `verify:${commandId}` }); }
+/** Explicit read-only verification only; it cannot update Gmail or resolve a draft conflict. */
+export async function enqueueUpdateDraftVerification(commandId: string) { return gmailCommandsQueue.add("verify-update-draft", { commandId, commandType: "update_draft" }, { jobId: `verify-update:${commandId}` }); }
 
 export async function enqueueSync(job: SyncJob) {
   return syncQueue.add("sync-mailbox", job, {

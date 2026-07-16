@@ -75,8 +75,12 @@ async function makeApp(options: { permission?: string; threads?: Set<string>; ma
       return { ...command, encryptedPayload: input.encryptedPayload, activeClaimId: "internal-claim", leaseExpiresAt: "internal-lease", providerResultReference: "internal-provider-result" };
     },
     createDraftWithCommand: async () => ({ id: "draft-command", commandType: "create_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
+    updateDraftWithCommand: async () => ({ id: "draft-command", commandType: "update_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
     findDraftForUser: async () => null,
-    isIdempotencyConflictError: (error) => error instanceof Error && error.message === "idempotency conflict"
+    isIdempotencyConflictError: (error) => error instanceof Error && error.message === "idempotency conflict",
+    isDraftRevisionConflictError: () => false,
+    isDraftStateConflictError: () => false,
+    isActiveDraftCommandError: () => false
   };
   const app = await createApiApp(dependencies);
   const signedOwnerSession = app.signCookie("owner-session");

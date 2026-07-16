@@ -11,6 +11,9 @@ export type EncryptedDraftContent = {
 };
 
 export type DraftCommand = Pick<Command, "id" | "commandType" | "status"> & { draftId: string };
+export class DraftRevisionConflictError extends Error { constructor() { super("draft revision conflicts with the current draft"); } }
+export class DraftStateConflictError extends Error { constructor() { super("draft is not ready for this operation"); } }
+export class ActiveDraftCommandError extends Error { constructor() { super("draft already has an active command"); } }
 export type StoredDraft = EncryptedDraftContent & {
   id: string;
   mailboxAccountId: string;
@@ -34,6 +37,19 @@ type CreateDraftInput = EncryptedDraftContent & {
   draftId: string;
   mailboxId: string;
   rfc822MessageId: string;
+  contentFingerprint: string;
+  recipientCount: number;
+  bodyByteCount: number;
+  hasHtml: boolean;
+  encryptedCommandPayload: string;
+  requestFingerprint: string;
+  idempotencyKey: string;
+};
+
+type UpdateDraftInput = EncryptedDraftContent & {
+  draftId: string;
+  mailboxId: string;
+  expectedRevision: number;
   contentFingerprint: string;
   recipientCount: number;
   bodyByteCount: number;
@@ -79,6 +95,61 @@ export async function findDraftForUser(mailboxId: string, draftId: string, userI
   return result.rows[0] ?? null;
 }
 
+/**
+ * Locks a ready application draft, records the desired encrypted revision, and
+ * creates its update command/outbox event in one transaction.  The command
+ * payload contains only local identity and the expected post-save revision.
+ */
+export async function updateDraftWithCommand(input: UpdateDraftInput): Promise<DraftCommand> {
+  return withTransaction(async (client) => {
+    const existing = await client.query<{ id: string; command_type: ProviderCommandType; status: ProviderCommandStatus; draft_id: string; request_fingerprint: string }>(
+      "SELECT id,command_type,status,draft_id,request_fingerprint FROM provider_commands WHERE mailbox_account_id=$1 AND idempotency_key=$2 FOR UPDATE",
+      [input.mailboxId, input.idempotencyKey]
+    );
+    if (existing.rowCount) {
+      const command = existing.rows[0];
+      if (command.request_fingerprint !== input.requestFingerprint || command.command_type !== "update_draft" || command.draft_id !== input.draftId) throw new IdempotencyConflictError();
+      return { id: command.id, commandType: command.command_type, status: command.status, draftId: command.draft_id };
+    }
+
+    const draft = await client.query<StoredDraft>(
+      `SELECT ${draftColumns} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 FOR UPDATE`,
+      [input.draftId, input.mailboxId]
+    );
+    if (!draft.rowCount) throw new DraftStateConflictError();
+    const current = draft.rows[0];
+    if (current.status !== "ready") throw new DraftStateConflictError();
+    if (current.revision !== input.expectedRevision) throw new DraftRevisionConflictError();
+
+    const active = await client.query(
+      "SELECT id FROM provider_commands WHERE draft_id=$1 AND status IN ('pending','running','retryable','recovery_required') FOR UPDATE",
+      [input.draftId]
+    );
+    if (active.rowCount) throw new ActiveDraftCommandError();
+
+    const nextRevision = current.revision + 1;
+    const prepared = await client.query<{ id: string }>(
+      `UPDATE drafts
+       SET status='updating',revision=$3,content_fingerprint=$4,
+           encrypted_recipients=$5,encrypted_subject=$6,encrypted_plain_text=$7,encrypted_html=$8,
+           recipient_count=$9,body_byte_count=$10,has_html=$11,updated_at=now()
+       WHERE id=$1 AND mailbox_account_id=$2 AND status='ready' AND revision=$12
+       RETURNING id`,
+      [input.draftId, input.mailboxId, nextRevision, input.contentFingerprint, input.encryptedRecipients, input.encryptedSubject, input.encryptedPlainText, input.encryptedHtml, input.recipientCount, input.bodyByteCount, input.hasHtml, input.expectedRevision]
+    );
+    if (!prepared.rowCount) throw new DraftRevisionConflictError();
+    const command = await client.query<{ id: string; command_type: ProviderCommandType; status: ProviderCommandStatus }>(
+      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status)
+       VALUES($1,$2,'update_draft',$3,$4,$5,'pending') RETURNING id,command_type,status`,
+      [input.mailboxId, input.draftId, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey]
+    );
+    await client.query("UPDATE drafts SET last_command_id=$2,updated_at=now() WHERE id=$1", [input.draftId, command.rows[0].id]);
+    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('provider_command',$1,'provider_command.requested','{}')", [command.rows[0].id]);
+    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.update_requested','draft',$1,gen_random_uuid(),$2)", [input.draftId, JSON.stringify({ revision: nextRevision })]);
+    return { id: command.rows[0].id, commandType: command.rows[0].command_type, status: command.rows[0].status, draftId: input.draftId };
+  });
+}
+
 /** Returns encrypted draft content only after the command claim and payload have been verified. */
 export async function loadDraftForCreation(client: PoolClient, commandId: string, mailboxId: string, draftId: string): Promise<StoredDraft> {
   const result = await client.query<StoredDraft>(`SELECT ${draftColumns} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3 AND status='creating' FOR UPDATE`, [draftId, mailboxId, commandId]);
@@ -86,10 +157,37 @@ export async function loadDraftForCreation(client: PoolClient, commandId: string
   return result.rows[0];
 }
 
+/** Loads the encrypted desired revision only after command claim validation. */
+export async function loadDraftForUpdate(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number): Promise<StoredDraft> {
+  const result = await client.query<StoredDraft>(
+    `SELECT ${draftColumns} FROM drafts
+     WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3
+       AND status='updating' AND revision=$4 AND gmail_draft_id IS NOT NULL AND gmail_draft_message_id IS NOT NULL
+     FOR UPDATE`,
+    [draftId, mailboxId, commandId, revision]
+  );
+  if (!result.rowCount) throw new Error("draft update projection is unavailable");
+  return result.rows[0];
+}
+
 /** Recovery verification needs only the stable Message-ID and local projection identity; no content is decrypted. */
 export async function loadDraftForRecovery(client: PoolClient, commandId: string, mailboxId: string): Promise<Pick<StoredDraft, "id" | "rfc822MessageId">> {
   const result = await client.query<Pick<StoredDraft, "id" | "rfc822MessageId">>("SELECT d.id,d.rfc822_message_id AS \"rfc822MessageId\" FROM drafts d JOIN provider_commands c ON c.draft_id=d.id WHERE c.id=$1 AND c.mailbox_account_id=$2 AND c.command_type='create_draft' AND c.status='recovery_required' AND d.last_command_id=c.id AND d.status='creating' FOR UPDATE", [commandId, mailboxId]);
   if (!result.rowCount) throw new Error("draft recovery projection is unavailable");
+  return result.rows[0];
+}
+
+/** Update verification intentionally reads only stable identity and confirmed provider metadata. */
+export async function loadDraftForUpdateRecovery(client: PoolClient, commandId: string, mailboxId: string): Promise<Pick<StoredDraft, "id" | "rfc822MessageId" | "gmailDraftId" | "gmailDraftMessageId">> {
+  const result = await client.query<Pick<StoredDraft, "id" | "rfc822MessageId" | "gmailDraftId" | "gmailDraftMessageId">>(
+    `SELECT d.id,d.rfc822_message_id AS "rfc822MessageId",d.gmail_draft_id AS "gmailDraftId",d.gmail_draft_message_id AS "gmailDraftMessageId"
+     FROM drafts d JOIN provider_commands c ON c.draft_id=d.id
+     WHERE c.id=$1 AND c.mailbox_account_id=$2 AND c.command_type='update_draft' AND c.status='recovery_required'
+       AND d.last_command_id=c.id AND d.status='updating' AND d.gmail_draft_id IS NOT NULL
+     FOR UPDATE`,
+    [commandId, mailboxId]
+  );
+  if (!result.rowCount) throw new Error("draft update recovery projection is unavailable");
   return result.rows[0];
 }
 
@@ -101,4 +199,26 @@ export async function confirmDraftCreation(client: PoolClient, draftId: string, 
     [draftId, commandId, provider.draftId, provider.messageId, provider.threadId]
   );
   if (!result.rowCount) throw new Error("draft confirmation projection is unavailable");
+}
+
+/** Must run in the same transaction as provider-command success completion. */
+export async function confirmDraftUpdate(client: PoolClient, draftId: string, commandId: string, revision: number, provider: { draftId: string; messageId: string; threadId: string | null }): Promise<void> {
+  const result = await client.query(
+    `UPDATE drafts
+     SET gmail_draft_id=$4,gmail_draft_message_id=$5,gmail_thread_id=$6,status='ready',
+         confirmed_revision=$3,confirmed_content_fingerprint=content_fingerprint,
+         provider_updated_at=now(),provider_checked_at=now(),updated_at=now()
+     WHERE id=$1 AND last_command_id=$2 AND status='updating' AND revision=$3`,
+    [draftId, commandId, revision, provider.draftId, provider.messageId, provider.threadId]
+  );
+  if (!result.rowCount) throw new Error("draft update confirmation projection is unavailable");
+}
+
+/** Preserves the encrypted desired revision and last confirmed provider identifiers. */
+export async function markDraftConflict(client: PoolClient, draftId: string, commandId: string): Promise<void> {
+  const result = await client.query(
+    "UPDATE drafts SET status='conflict',conflict_observed_at=now(),provider_checked_at=now(),updated_at=now() WHERE id=$1 AND last_command_id=$2 AND status='updating'",
+    [draftId, commandId]
+  );
+  if (!result.rowCount) throw new Error("draft conflict projection is unavailable");
 }

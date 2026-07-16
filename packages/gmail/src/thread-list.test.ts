@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel } from "./index.js";
+import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel, updateDraft } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -71,6 +71,13 @@ test("draft adapter creates and reads only normalized Gmail draft references", a
     { userId: "me", id: "gmail-draft", format: "metadata" }
   ]);
   assert.equal(JSON.stringify(created).includes("never-returned"), false);
+});
+
+test("draft adapter updates only the Gmail Draft resource and normalizes its replacement message", async () => {
+  const calls: unknown[] = [];
+  const gmail = { users: { drafts: { update: async (input: unknown) => { calls.push(input); return { data: { id: "draft-resource", message: { id: "replacement-message", threadId: "thread" } } }; } } } };
+  assert.deepEqual(await updateDraft(gmail as never, "draft-resource", "Subject: x\r\n\r\nbody"), { draftId: "draft-resource", messageId: "replacement-message", threadId: "thread" });
+  assert.deepEqual(calls, [{ userId: "me", id: "draft-resource", requestBody: { message: { raw: Buffer.from("Subject: x\r\n\r\nbody", "utf8").toString("base64url") } } }]);
 });
 
 test("draft Message-ID verification searches only Gmail drafts and returns normalized cardinality", async () => {

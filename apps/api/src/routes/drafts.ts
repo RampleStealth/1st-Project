@@ -21,17 +21,31 @@ type Deps = {
     draftId: string; mailboxId: string; rfc822MessageId: string; contentFingerprint: string; encryptedRecipients: string; encryptedSubject: string; encryptedPlainText: string; encryptedHtml: string | null;
     recipientCount: number; bodyByteCount: number; hasHtml: boolean; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string;
   }) => Promise<CreatedDraftCommand>;
+  updateDraftWithCommand: (input: {
+    draftId: string; mailboxId: string; expectedRevision: number; contentFingerprint: string; encryptedRecipients: string; encryptedSubject: string; encryptedPlainText: string; encryptedHtml: string | null;
+    recipientCount: number; bodyByteCount: number; hasHtml: boolean; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string;
+  }) => Promise<CreatedDraftCommand>;
   findDraftForUser: (mailboxId: string, draftId: string, userId: string) => Promise<StoredDraft | null>;
   isIdempotencyConflictError: (error: unknown) => boolean;
+  isDraftRevisionConflictError: (error: unknown) => boolean;
+  isDraftStateConflictError: (error: unknown) => boolean;
+  isActiveDraftCommandError: (error: unknown) => boolean;
 };
 
 function validIdempotencyKey(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 function bodyBytes(content: { plainText: string; html: string | null }) { return Buffer.byteLength(content.plainText, "utf8") + (content.html ? Buffer.byteLength(content.html, "utf8") : 0); }
+function ifMatchRevision(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^"([1-9]\d*)"$/.exec(value);
+  if (!match) return null;
+  const revision = Number(match[1]);
+  return Number.isSafeInteger(revision) ? revision : null;
+}
 
 export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, deps: Deps) {
-  const { config, pool, findMailboxForUser, createDraftWithCommand, findDraftForUser, isIdempotencyConflictError } = deps;
+  const { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, findDraftForUser, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError } = deps;
   app.post<{ Params: { mailboxId: string }; Body: DraftContentInput }>("/v1/mailboxes/:mailboxId/drafts", async (request, reply) => {
     const user = await authenticatedUser(request, pool);
     if (!user) return reply.code(401).send({ code: "unauthenticated" });
@@ -81,6 +95,52 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
       return { id: draft.id, status: draft.status, revision: draft.revision, confirmedRevision: draft.confirmedRevision, recipientCount: draft.recipientCount, hasHtml: draft.hasHtml, createdAt: draft.createdAt, updatedAt: draft.updatedAt, ...content };
     } catch {
       return reply.code(422).send({ code: "draft_unavailable" });
+    }
+  });
+
+  app.put<{ Params: { mailboxId: string; draftId: string }; Body: DraftContentInput }>("/v1/mailboxes/:mailboxId/drafts/:draftId", async (request, reply) => {
+    const user = await authenticatedUser(request, pool);
+    if (!user) return reply.code(401).send({ code: "unauthenticated" });
+    if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed" });
+    const idempotencyKey = request.headers["idempotency-key"];
+    if (!validIdempotencyKey(idempotencyKey)) return reply.code(400).send({ code: "invalid_idempotency_key" });
+    const header = request.headers["if-match"];
+    if (header === undefined) return reply.code(428).send({ code: "precondition_required" });
+    const expectedRevision = ifMatchRevision(header);
+    if (expectedRevision === null) return reply.code(400).send({ code: "invalid_draft_revision" });
+    const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
+    if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found" });
+    if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required" });
+    const permission = await pool.query<{ write_capability: string }>("SELECT write_capability FROM mailbox_permission_state WHERE mailbox_account_id=$1", [mailbox.id]);
+    if (permission.rows[0]?.write_capability !== "write_granted") return reply.code(409).send({ code: "permission_required" });
+    // Verify owner scope before accepting, canonicalizing, or encrypting any new desired content.
+    if (!await findDraftForUser(mailbox.id, request.params.draftId, user.id)) return reply.code(404).send({ code: "draft_not_found" });
+    let content;
+    try { content = canonicalizeDraftContent(request.body); }
+    catch { return reply.code(400).send({ code: "invalid_draft_content" }); }
+    const fingerprint = fingerprintDraftContent(content, config.TOKEN_ENCRYPTION_KEY_BASE64);
+    const nextRevision = expectedRevision + 1;
+    try {
+      const command = await updateDraftWithCommand({
+        draftId: request.params.draftId,
+        mailboxId: mailbox.id,
+        expectedRevision,
+        contentFingerprint: fingerprint,
+        ...encryptDraftContent(content, config.TOKEN_ENCRYPTION_KEY_BASE64),
+        recipientCount: content.to.length + content.cc.length + content.bcc.length,
+        bodyByteCount: bodyBytes(content),
+        hasHtml: content.html !== null,
+        encryptedCommandPayload: encryptProviderCommandPayload("update_draft", { version: 1, draftId: request.params.draftId, revision: nextRevision }, config.TOKEN_ENCRYPTION_KEY_BASE64),
+        requestFingerprint: createHash("sha256").update(`update_draft:${request.params.draftId}:${expectedRevision}:${fingerprint}`).digest("hex"),
+        idempotencyKey
+      });
+      return reply.code(202).send({ id: command.id, commandType: command.commandType, status: command.status, draftId: command.draftId, revision: nextRevision });
+    } catch (error) {
+      if (isIdempotencyConflictError(error)) return reply.code(409).send({ code: "idempotency_conflict" });
+      if (isDraftRevisionConflictError(error)) return reply.code(409).send({ code: "draft_revision_conflict" });
+      if (isActiveDraftCommandError(error)) return reply.code(409).send({ code: "draft_command_active" });
+      if (isDraftStateConflictError(error)) return reply.code(409).send({ code: "draft_not_ready" });
+      throw error;
     }
   });
 }
