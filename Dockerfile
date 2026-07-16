@@ -14,6 +14,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /build/runtime ./runtime
 COPY --from=build /build/apps/web/dist ./runtime/web/dist
-COPY --from=build /build/packages/database/migrations ./migrations
+COPY --from=build /build/packages/database/migrations ./runtime/migrations
 USER aio
 ENTRYPOINT ["node"]
