@@ -4,13 +4,14 @@ import { loadConfig } from "@aio/config";
 import { findMailboxById, pool, withTransaction } from "@aio/database";
 import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
-import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, currentHistoryId, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailProviderError, watchMailbox } from "@aio/gmail";
+import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailProviderError, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueProviderCommand, enqueueSync } from "@aio/jobs";
 import { logger } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
 import { hasUnprocessedPendingHistory, shouldRetryForUnavailableHistory } from "./sync-state.js";
 import { claimCommand, claimOutboxEvents, completeClaim, completeConfirmedMutation, loadClaimedCommand, markOutboxPublished, recoverExpiredLeases, releaseOutboxClaim, scheduleRetryFromClaim, StaleCommandClaimError } from "@aio/database/repositories/provider-command";
 import { executeProviderCommand } from "./provider-command-executor.js";
+import { confirmDraftCreation, loadDraftForCreation } from "@aio/database/repositories/draft";
 
 const config = loadConfig();
 const commandWorker = new Worker("gmail-commands", async (job) => executeProviderCommand(job.data.commandId, {
@@ -21,6 +22,9 @@ const commandWorker = new Worker("gmail-commands", async (job) => executeProvide
   gmailForMailbox: (mailbox) => gmailForMailbox(config, mailbox.encrypted_refresh_token),
   archiveThread,
   markThreadUnread,
+  loadDraftForCreation,
+  createDraft,
+  confirmDraftCreation,
   withTransaction,
   completeConfirmedMutation,
   scheduleRetryFromClaim,

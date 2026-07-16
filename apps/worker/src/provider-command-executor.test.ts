@@ -14,6 +14,9 @@ import {
 } from "@aio/database/repositories/provider-command";
 import { classifyGmailMutationError } from "@aio/gmail";
 import { encryptSecret } from "@aio/security";
+import { encryptDraftContent, encryptProviderCommandPayload, fingerprintDraftContent } from "@aio/security";
+import { canonicalizeDraftContent, generateDraftMessageId } from "@aio/gmail";
+import { confirmDraftCreation, createDraftWithCommand, loadDraftForCreation } from "@aio/database/repositories/draft";
 import { executeProviderCommand } from "./provider-command-executor.js";
 
 const available = Boolean(process.env.DATABASE_URL && process.env.TOKEN_ENCRYPTION_KEY_BASE64);
@@ -48,6 +51,16 @@ async function command(mailboxId: string, commandType: ProviderCommandType, prov
   });
 }
 
+async function createDraftCommand(mailboxId: string, suffix = randomUUID()) {
+  const content = canonicalizeDraftContent({ to: ["recipient@example.test"], cc: [], bcc: [], subject: "Draft subject", plainText: "Draft body", html: null });
+  const draftId = randomUUID();
+  return createDraftWithCommand({
+    draftId, mailboxId, rfc822MessageId: generateDraftMessageId("example.test", suffix), contentFingerprint: fingerprintDraftContent(content, key),
+    ...encryptDraftContent(content, key), recipientCount: 1, bodyByteCount: Buffer.byteLength(content.plainText), hasHtml: false,
+    encryptedCommandPayload: encryptProviderCommandPayload("create_draft", { version: 1, draftId }, key), requestFingerprint: `create_draft:${suffix}`, idempotencyKey: suffix
+  });
+}
+
 function executor(overrides: Partial<Parameters<typeof executeProviderCommand>[1]> = {}) {
   return {
     encryptionKey: key,
@@ -57,6 +70,9 @@ function executor(overrides: Partial<Parameters<typeof executeProviderCommand>[1
     gmailForMailbox: () => ({}) as never,
     archiveThread: async () => undefined,
     markThreadUnread: async () => undefined,
+    loadDraftForCreation: async () => { throw new Error("draft loader should not run for a thread command"); },
+    createDraft: async () => { throw new Error("draft adapter should not run for a thread command"); },
+    confirmDraftCreation: async () => { throw new Error("draft projection should not run for a thread command"); },
     withTransaction,
     completeConfirmedMutation,
     scheduleRetryFromClaim,
@@ -104,6 +120,33 @@ test("confirmed archive and unread mutate only their intended projection state",
   } finally {
     await data.cleanup();
   }
+});
+
+test("create draft waits for Gmail confirmation before atomically confirming the encrypted draft projection", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const created = await createDraftCommand(data.mailboxId);
+    const result = await executeProviderCommand(created.id, executor({
+      loadDraftForCreation,
+      createDraft: async () => ({ draftId: "gmail-draft", messageId: "gmail-message", threadId: "gmail-thread" }),
+      confirmDraftCreation
+    }));
+    assert.deepEqual(result, { outcome: "succeeded" });
+    const draft = await pool.query<{ status: string; gmail_draft_id: string; confirmed_revision: number; confirmed_content_fingerprint: string }>("SELECT status,gmail_draft_id,confirmed_revision,confirmed_content_fingerprint FROM drafts WHERE id=$1", [created.draftId]);
+    assert.deepEqual(draft.rows[0], { status: "ready", gmail_draft_id: "gmail-draft", confirmed_revision: 1, confirmed_content_fingerprint: (await pool.query<{ content_fingerprint: string }>("SELECT content_fingerprint FROM drafts WHERE id=$1", [created.draftId])).rows[0].content_fingerprint });
+    assert.equal((await commandState(created.id)).status, "succeeded");
+
+    const rollback = await createDraftCommand(data.mailboxId);
+    const failed = await executeProviderCommand(rollback.id, executor({
+      loadDraftForCreation,
+      createDraft: async () => ({ draftId: "gmail-draft-rollback", messageId: "gmail-message-rollback", threadId: null }),
+      confirmDraftCreation: async () => { throw new Error("projection persistence failed"); }
+    }));
+    assert.deepEqual(failed, { outcome: "recovery_required" });
+    const unconfirmed = await pool.query<{ status: string; gmail_draft_id: string | null }>("SELECT status,gmail_draft_id FROM drafts WHERE id=$1", [rollback.draftId]);
+    assert.deepEqual(unconfirmed.rows[0], { status: "creating", gmail_draft_id: null });
+    assert.equal((await commandState(rollback.id)).status, "recovery_required");
+  } finally { await data.cleanup(); }
 });
 
 test("completion is transactional and stale, expired, and malformed claims cannot mutate", { skip: !available }, async () => {
@@ -182,7 +225,7 @@ test("worker error handling retries only safe failures and requires recovery for
     assert.equal(await claimCommand(uncertain.id), null);
 
     let gmailCalled = false;
-    const unsupported = await command(data.mailboxId, "create_draft", "archive-thread");
+    const unsupported = await command(data.mailboxId, "update_draft", "archive-thread");
     await pool.query("UPDATE provider_commands SET encrypted_payload='not-a-valid-payload' WHERE id=$1", [unsupported.id]);
     assert.deepEqual(await executeProviderCommand(unsupported.id, executor({ archiveThread: async () => { gmailCalled = true; } })), { outcome: "unsupported" });
     assert.equal((await commandState(unsupported.id)).failure_code, "unsupported_command");

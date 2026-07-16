@@ -4,6 +4,7 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate, useParams
 import { connectionHealth, type MailboxSummary } from "./mailbox-health.js";
 import { ThreadList } from "./thread-list.js";
 import { ThreadReader } from "./thread-reader.js";
+import { DraftComposer } from "./draft-composer.js";
 import "./styles.css";
 
 const views = [
@@ -26,8 +27,9 @@ function ConnectionBanner({ mailbox }: { mailbox: MailboxSummary }) {
 function cookieValue(name: string) { return document.cookie.split("; ").find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1) ?? ""; }
 function WritePermission({ mailbox }: { mailbox: MailboxSummary }) {
   const [state, setState] = useState<"idle" | "loading" | "failed">("idle");
-  if (mailbox.write_capability === "write_granted") return <p className="permission-note">Gmail write permission enabled.</p>;
   const start = async () => { setState("loading"); try { const response = await fetch(`/v1/mailboxes/${mailbox.id}/permissions/write/start`, { method: "POST", credentials: "include", headers: { "x-csrf-token": cookieValue("aio_csrf") } }); const body = await response.json() as { authorizationUrl?: string }; if (!response.ok || !body.authorizationUrl) throw new Error(); location.assign(body.authorizationUrl); } catch { setState("failed"); } };
+  useEffect(() => { const requested = () => { void start(); }; window.addEventListener("aio:request-write-permission", requested); return () => window.removeEventListener("aio:request-write-permission", requested); });
+  if (mailbox.write_capability === "write_granted") return <p className="permission-note">Gmail write permission enabled.</p>;
   return <section className="permission-card"><strong>Enable Gmail actions</strong><p>Allows archive, mark unread, and creating, editing, and sending drafts. Nothing happens until you choose an action.</p>{state === "failed" && <p role="alert">We could not start permission setup. Try again.</p>}<button className="button" disabled={state === "loading"} onClick={() => void start()} type="button">{state === "loading" ? "Opening Google…" : "Review permissions"}</button></section>;
 }
 
@@ -44,7 +46,7 @@ function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   const { view = "inbox", threadId } = useParams();
   const navigate = useNavigate();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader"><ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={()=>navigate(`/mail/${mailbox.id}/inbox`)} onUnread={()=>undefined} /></aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={() => window.dispatchEvent(new Event("aio:request-write-permission"))} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={()=>navigate(`/mail/${mailbox.id}/inbox`)} onUnread={()=>undefined} />}</aside></div></main></div>;
 }
 
 function App() {

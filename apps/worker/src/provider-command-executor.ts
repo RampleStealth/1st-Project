@@ -1,11 +1,16 @@
 import type { ProviderCommandType } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
-import type { LoadedClaimedCommand } from "@aio/database/repositories/provider-command";
+import { InvalidCommandPayloadError, type LoadedClaimedCommand } from "@aio/database/repositories/provider-command";
 import type { gmail_v1 } from "googleapis";
 import type { PoolClient } from "pg";
 import type { GmailMutationErrorCode } from "@aio/gmail";
+import type { GmailDraftReference } from "@aio/gmail";
+import type { StoredDraft } from "@aio/database/repositories/draft";
+import { buildDraftMime } from "@aio/gmail";
+import { decryptDraftContent } from "@aio/security";
 
 type SupportedThreadCommand = Extract<ProviderCommandType, "archive_thread" | "mark_thread_unread">;
+type SupportedCommand = SupportedThreadCommand | "create_draft";
 type CommandClaim = { claimId: string; command: { mailboxAccountId: string; commandType: ProviderCommandType } };
 type LoadedCommand = LoadedClaimedCommand;
 
@@ -24,6 +29,9 @@ export type ProviderCommandExecutorDependencies = {
   gmailForMailbox: (mailbox: MailboxAccount) => gmail_v1.Gmail;
   archiveThread: (gmail: gmail_v1.Gmail, providerThreadId: string) => Promise<void>;
   markThreadUnread: (gmail: gmail_v1.Gmail, providerThreadId: string) => Promise<void>;
+  loadDraftForCreation: (client: PoolClient, commandId: string, mailboxId: string, draftId: string) => Promise<StoredDraft>;
+  createDraft: (gmail: gmail_v1.Gmail, mime: string) => Promise<GmailDraftReference>;
+  confirmDraftCreation: (client: PoolClient, draftId: string, commandId: string, provider: GmailDraftReference) => Promise<void>;
   withTransaction: <T>(fn: (client: PoolClient) => Promise<T>) => Promise<T>;
   completeConfirmedMutation: (client: PoolClient, commandId: string, claimId: string, projection: () => Promise<void>, providerResult: string) => Promise<void>;
   scheduleRetryFromClaim: (client: PoolClient, commandId: string, claimId: string, failureCode: string) => Promise<{ status: "failed" | "retryable"; delay: number }>;
@@ -32,8 +40,8 @@ export type ProviderCommandExecutorDependencies = {
   isStaleCommandClaimError: (error: unknown) => boolean;
 };
 
-function isSupportedThreadCommand(commandType: ProviderCommandType): commandType is SupportedThreadCommand {
-  return commandType === "archive_thread" || commandType === "mark_thread_unread";
+function isSupportedCommand(commandType: ProviderCommandType): commandType is SupportedCommand {
+  return commandType === "archive_thread" || commandType === "mark_thread_unread" || commandType === "create_draft";
 }
 
 export async function applyConfirmedThreadProjection(
@@ -61,7 +69,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
   if (!claim) return { outcome: "not_claimed" as const };
 
   // Reject unsupported future command types before decrypting their payload.
-  if (!isSupportedThreadCommand(claim.command.commandType)) {
+  if (!isSupportedCommand(claim.command.commandType)) {
     return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "unsupported_command"))
       ? { outcome: "unsupported" as const }
       : { outcome: "stale" as const };
@@ -71,7 +79,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     const loaded = await dependencies.withTransaction((client) =>
       dependencies.loadClaimedCommand(client, commandId, claim.claimId, dependencies.encryptionKey)
     );
-    if (loaded.commandType !== "archive_thread" && loaded.commandType !== "mark_thread_unread") {
+    if (loaded.commandType !== "archive_thread" && loaded.commandType !== "mark_thread_unread" && loaded.commandType !== "create_draft") {
       return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "unsupported_command"))
         ? { outcome: "unsupported" as const }
         : { outcome: "stale" as const };
@@ -82,8 +90,6 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
         ? { outcome: "unsupported" as const }
         : { outcome: "stale" as const };
     }
-    const providerThreadId = loaded.payload.providerThreadId;
-
     const mailbox = await dependencies.findMailboxById(claim.command.mailboxAccountId);
     if (!mailbox) {
       return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "mailbox_not_found"))
@@ -92,6 +98,20 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     }
 
     const gmail = dependencies.gmailForMailbox(mailbox);
+    if (commandType === "create_draft") {
+      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForCreation(client, commandId, mailbox.id, loaded.payload.draftId));
+      // The encrypted content is only opened inside this verified worker execution path.
+      const content = decryptDraftContent(draft, dependencies.encryptionKey);
+      const mime = buildDraftMime(content, { messageId: draft.rfc822MessageId });
+      const provider = await dependencies.createDraft(gmail, mime.mime);
+      await dependencies.withTransaction((client) => dependencies.completeConfirmedMutation(
+        client, commandId, claim.claimId,
+        () => dependencies.confirmDraftCreation(client, draft.id, commandId, provider),
+        "create_draft"
+      ));
+      return { outcome: "succeeded" as const };
+    }
+    const providerThreadId = loaded.payload.providerThreadId;
     if (commandType === "archive_thread") await dependencies.archiveThread(gmail, providerThreadId);
     else await dependencies.markThreadUnread(gmail, providerThreadId);
 
@@ -107,6 +127,11 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     return { outcome: "succeeded" as const };
   } catch (error) {
     if (dependencies.isStaleCommandClaimError(error)) return { outcome: "stale" as const };
+    if (error instanceof InvalidCommandPayloadError) {
+      return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "invalid_command_payload"))
+        ? { outcome: "failed" as const }
+        : { outcome: "stale" as const };
+    }
     const code = dependencies.classifyGmailMutationError(error);
     if (code === "rate_limited" || code === "transient_provider_failure") {
       try {

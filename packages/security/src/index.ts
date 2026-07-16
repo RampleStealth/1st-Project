@@ -61,6 +61,12 @@ export const providerCommandPayloadRegistry: Record<ProviderCommandType, Registe
   Object.entries(providerCommandPayloadDefinitions).map(([type, definition]) => [type, registeredPayload(definition)])
 ) as Record<ProviderCommandType, RegisteredPayload>;
 
+/** Validates a versioned payload before it crosses the encrypted command boundary. */
+export function encryptProviderCommandPayload<T extends ProviderCommandType>(commandType: T, payload: unknown, keyBase64: string): string {
+  const parsed = providerCommandPayloadRegistry[commandType].parse(payload);
+  return encryptSecret(JSON.stringify(parsed), keyBase64);
+}
+
 export function decryptProviderCommandPayload(commandType: ProviderCommandType, encryptedPayload: string, keyBase64: string): ProviderCommandPayload {
   return { commandType, payload: providerCommandPayloadRegistry[commandType].decrypt(encryptedPayload, keyBase64) } as ProviderCommandPayload;
 }

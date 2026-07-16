@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel } from "./index.js";
+import { archiveThread, classifyGmailMutationError, createDraft, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -54,4 +54,21 @@ test("mutation error classification is safe for retries, permissions, and uncert
   assert.equal(classifyGmailMutationError({ response: { status: 401, data: {} } }), "reauthorization_required");
   assert.equal(classifyGmailMutationError({ response: { status: 403, data: { message: "Request had insufficient authentication scopes." } } }), "write_scope_required");
   assert.equal(classifyGmailMutationError({ request: { socket: {} } }), "uncertain_provider_outcome");
+});
+
+test("draft adapter creates and reads only normalized Gmail draft references", async () => {
+  const calls: unknown[] = [];
+  const gmail = { users: { drafts: {
+    create: async (input: unknown) => { calls.push(input); return { data: { id: "gmail-draft", message: { id: "gmail-message", threadId: "gmail-thread", raw: "never-returned" } } }; },
+    get: async (input: unknown) => { calls.push(input); return { data: { id: "gmail-draft", message: { id: "gmail-message", threadId: "gmail-thread", raw: "never-returned" } } }; }
+  } } };
+  const created = await createDraft(gmail as never, "Subject: test\r\n\r\nbody");
+  const read = await getDraft(gmail as never, "gmail-draft");
+  assert.deepEqual(created, { draftId: "gmail-draft", messageId: "gmail-message", threadId: "gmail-thread" });
+  assert.deepEqual(read, created);
+  assert.deepEqual(calls, [
+    { userId: "me", requestBody: { message: { raw: Buffer.from("Subject: test\r\n\r\nbody", "utf8").toString("base64url") } } },
+    { userId: "me", id: "gmail-draft", format: "metadata" }
+  ]);
+  assert.equal(JSON.stringify(created).includes("never-returned"), false);
 });

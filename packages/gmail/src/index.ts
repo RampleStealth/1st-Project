@@ -93,6 +93,24 @@ export async function getThreadFull(gmail: gmail_v1.Gmail, id: string) {
 export async function archiveThread(gmail: gmail_v1.Gmail, id: string) { await gmail.users.threads.modify({ userId:"me", id, requestBody:{ removeLabelIds:["INBOX"] } }); }
 export async function markThreadUnread(gmail: gmail_v1.Gmail, id: string) { await gmail.users.threads.modify({ userId:"me", id, requestBody:{ addLabelIds:["UNREAD"] } }); }
 
+export type GmailDraftReference = { draftId: string; messageId: string; threadId: string | null };
+
+/** Creates a Gmail draft from the application-owned, validated RFC 5322 MIME document. */
+export async function createDraft(gmail: gmail_v1.Gmail, mime: string): Promise<GmailDraftReference> {
+  const response = await gmail.users.drafts.create({ userId: "me", requestBody: { message: { raw: Buffer.from(mime, "utf8").toString("base64url") } } });
+  const data = response.data;
+  if (!data.id || !data.message?.id) throw new Error("Gmail did not confirm a draft identifier");
+  return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
+}
+
+/** Metadata-only lookup; raw MIME and draft bodies are deliberately never requested. */
+export async function getDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<GmailDraftReference> {
+  const response = await gmail.users.drafts.get({ userId: "me", id: draftId, format: "metadata" });
+  const data = response.data;
+  if (!data.id || !data.message?.id) throw new Error("Gmail draft is unavailable");
+  return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
+}
+
 export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required" | "reauthorization_required" | "rate_limited" | "transient_provider_failure" | "uncertain_provider_outcome" | "unknown_provider_failure";
 
 /**

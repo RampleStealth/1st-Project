@@ -13,6 +13,8 @@ export type ProductionDependencyFactories = {
   recordPendingHistory: ApiAppDependencies["recordPendingHistory"];
   enqueueSync: ApiAppDependencies["enqueueSync"];
   insertProviderCommand: ApiAppDependencies["insertProviderCommand"];
+  createDraftWithCommand: ApiAppDependencies["createDraftWithCommand"];
+  findDraftForUser: ApiAppDependencies["findDraftForUser"];
   isIdempotencyConflictError: ApiAppDependencies["isIdempotencyConflictError"];
 };
 
@@ -26,6 +28,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     { findMailboxForUser },
     { ensureMailboxSyncState, recordPendingHistory },
     { insertProviderCommand, IdempotencyConflictError },
+    { createDraftWithCommand, findDraftForUser },
     { SanitizedThreadCache },
     { enqueueSync },
     { logger }
@@ -36,6 +39,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     import("@aio/database/repositories/mailbox-account"),
     import("@aio/database/repositories/mailbox-sync"),
     import("@aio/database/repositories/provider-command"),
+    import("@aio/database/repositories/draft"),
     import("@aio/gmail"),
     import("@aio/jobs"),
     import("@aio/observability")
@@ -53,6 +57,8 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     recordPendingHistory,
     enqueueSync,
     insertProviderCommand,
+    createDraftWithCommand,
+    findDraftForUser,
     isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError
   };
 }
@@ -76,6 +82,8 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       recordPendingHistory: factories.recordPendingHistory,
       enqueueSync: factories.enqueueSync,
       insertProviderCommand: factories.insertProviderCommand,
+      createDraftWithCommand: factories.createDraftWithCommand,
+      findDraftForUser: factories.findDraftForUser,
       isIdempotencyConflictError: factories.isIdempotencyConflictError
     };
   } catch (error) {
