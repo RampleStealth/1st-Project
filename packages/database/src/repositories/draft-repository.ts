@@ -86,6 +86,13 @@ export async function loadDraftForCreation(client: PoolClient, commandId: string
   return result.rows[0];
 }
 
+/** Recovery verification needs only the stable Message-ID and local projection identity; no content is decrypted. */
+export async function loadDraftForRecovery(client: PoolClient, commandId: string, mailboxId: string): Promise<Pick<StoredDraft, "id" | "rfc822MessageId">> {
+  const result = await client.query<Pick<StoredDraft, "id" | "rfc822MessageId">>("SELECT d.id,d.rfc822_message_id AS \"rfc822MessageId\" FROM drafts d JOIN provider_commands c ON c.draft_id=d.id WHERE c.id=$1 AND c.mailbox_account_id=$2 AND c.command_type='create_draft' AND c.status='recovery_required' AND d.last_command_id=c.id AND d.status='creating' FOR UPDATE", [commandId, mailboxId]);
+  if (!result.rowCount) throw new Error("draft recovery projection is unavailable");
+  return result.rows[0];
+}
+
 /** Must be called inside completeConfirmedMutation's transaction-scoped projection callback. */
 export async function confirmDraftCreation(client: PoolClient, draftId: string, commandId: string, provider: { draftId: string; messageId: string; threadId: string | null }): Promise<void> {
   const result = await client.query(

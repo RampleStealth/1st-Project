@@ -111,6 +111,16 @@ export async function getDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<
   return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
 }
 
+export type DraftMessageIdSearch = { kind: "none" } | { kind: "one"; draft: GmailDraftReference } | { kind: "ambiguous" };
+/** Searches Gmail's draft resource only. It requests metadata, never raw MIME or message bodies. */
+export async function findDraftByRfc822MessageId(gmail: gmail_v1.Gmail, messageId: string): Promise<DraftMessageIdSearch> {
+  const list = await gmail.users.drafts.list({ userId: "me", q: `rfc822msgid:${messageId}`, maxResults: 3 });
+  const ids = list.data.drafts?.flatMap((draft) => draft.id ? [draft.id] : []) ?? [];
+  if (!ids.length) return { kind: "none" };
+  if (ids.length > 1) return { kind: "ambiguous" };
+  return { kind: "one", draft: await getDraft(gmail, ids[0]) };
+}
+
 export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required" | "reauthorization_required" | "rate_limited" | "transient_provider_failure" | "uncertain_provider_outcome" | "unknown_provider_failure";
 
 /**

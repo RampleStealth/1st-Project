@@ -7,8 +7,13 @@ import {
   claimCommand,
   completeClaim,
   completeConfirmedMutation,
+  completeRecoveredDraftCreation,
   InvalidCommandPayloadError,
+  claimCreateDraftRecovery,
   loadClaimedCommand,
+  markProviderExecutionStarted,
+  recoverExpiredLeases,
+  releaseCreateDraftRecoveryClaim,
   scheduleRetryFromClaim,
   StaleCommandClaimError
 } from "@aio/database/repositories/provider-command";
@@ -16,8 +21,8 @@ import { classifyGmailMutationError } from "@aio/gmail";
 import { encryptSecret } from "@aio/security";
 import { encryptDraftContent, encryptProviderCommandPayload, fingerprintDraftContent } from "@aio/security";
 import { canonicalizeDraftContent, generateDraftMessageId } from "@aio/gmail";
-import { confirmDraftCreation, createDraftWithCommand, loadDraftForCreation } from "@aio/database/repositories/draft";
-import { executeProviderCommand } from "./provider-command-executor.js";
+import { confirmDraftCreation, createDraftWithCommand, loadDraftForCreation, loadDraftForRecovery } from "@aio/database/repositories/draft";
+import { executeProviderCommand, verifyCreateDraftRecovery } from "./provider-command-executor.js";
 
 const available = Boolean(process.env.DATABASE_URL && process.env.TOKEN_ENCRYPTION_KEY_BASE64);
 const key = process.env.TOKEN_ENCRYPTION_KEY_BASE64 ?? "";
@@ -73,6 +78,7 @@ function executor(overrides: Partial<Parameters<typeof executeProviderCommand>[1
     loadDraftForCreation: async () => { throw new Error("draft loader should not run for a thread command"); },
     createDraft: async () => { throw new Error("draft adapter should not run for a thread command"); },
     confirmDraftCreation: async () => { throw new Error("draft projection should not run for a thread command"); },
+    markProviderExecutionStarted,
     withTransaction,
     completeConfirmedMutation,
     scheduleRetryFromClaim,
@@ -128,7 +134,7 @@ test("create draft waits for Gmail confirmation before atomically confirming the
     const created = await createDraftCommand(data.mailboxId);
     const result = await executeProviderCommand(created.id, executor({
       loadDraftForCreation,
-      createDraft: async () => ({ draftId: "gmail-draft", messageId: "gmail-message", threadId: "gmail-thread" }),
+      createDraft: async () => { const marked = await pool.query<{ provider_execution_started_at: Date | null }>("SELECT provider_execution_started_at FROM provider_commands WHERE id=$1", [created.id]); assert.ok(marked.rows[0].provider_execution_started_at); return { draftId: "gmail-draft", messageId: "gmail-message", threadId: "gmail-thread" }; },
       confirmDraftCreation
     }));
     assert.deepEqual(result, { outcome: "succeeded" });
@@ -146,6 +152,88 @@ test("create draft waits for Gmail confirmation before atomically confirming the
     const unconfirmed = await pool.query<{ status: string; gmail_draft_id: string | null }>("SELECT status,gmail_draft_id FROM drafts WHERE id=$1", [rollback.draftId]);
     assert.deepEqual(unconfirmed.rows[0], { status: "creating", gmail_draft_id: null });
     assert.equal((await commandState(rollback.id)).status, "recovery_required");
+  } finally { await data.cleanup(); }
+});
+
+test("create-draft lease recovery never retries a provider execution that may have started", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const created = await createDraftCommand(data.mailboxId);
+    const claim = await claimCommand(created.id); assert.ok(claim);
+    await withTransaction((client) => markProviderExecutionStarted(client, created.id, claim.claimId));
+    await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [created.id]);
+    await recoverExpiredLeases();
+    const state = await commandState(created.id); assert.equal(state.status, "recovery_required"); assert.equal(await claimCommand(created.id), null);
+    let providerCalled = false;
+    assert.deepEqual(await executeProviderCommand(created.id, executor({ createDraft: async () => { providerCalled = true; return { draftId: "unexpected", messageId: "unexpected", threadId: null }; } })), { outcome: "not_claimed" });
+    assert.equal(providerCalled, false);
+  } finally { await data.cleanup(); }
+});
+
+test("execution markers reject stale claims and make post-provider failures recovery-required while pre-provider failures stay retryable", { skip: !available }, async () => {
+  const data = await fixture();
+  const providerError = { response: { status: 503, data: {} } };
+  try {
+    const stale = await createDraftCommand(data.mailboxId); const staleClaim = await claimCommand(stale.id); assert.ok(staleClaim);
+    await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [stale.id]);
+    await assert.rejects(() => withTransaction((client) => markProviderExecutionStarted(client, stale.id, staleClaim.claimId)), StaleCommandClaimError);
+
+    const preProvider = await createDraftCommand(data.mailboxId);
+    assert.deepEqual(await executeProviderCommand(preProvider.id, executor({ loadDraftForCreation, gmailForMailbox: () => { throw providerError; } })), { outcome: "retryable" });
+    assert.equal((await commandState(preProvider.id)).status, "retryable");
+
+    const uncertain = await createDraftCommand(data.mailboxId);
+    assert.deepEqual(await executeProviderCommand(uncertain.id, executor({ loadDraftForCreation, createDraft: async () => { throw providerError; }, confirmDraftCreation })), { outcome: "recovery_required" });
+    assert.equal((await commandState(uncertain.id)).status, "recovery_required");
+  } finally { await data.cleanup(); }
+});
+
+function recoveryExecutor(overrides: Partial<Parameters<typeof verifyCreateDraftRecovery>[1]> = {}) {
+  return {
+    claimCreateDraftRecovery,
+    releaseCreateDraftRecoveryClaim,
+    completeRecoveredDraftCreation,
+    loadDraftForRecovery,
+    findMailboxById,
+    gmailForMailbox: () => ({}) as never,
+    findDraftByRfc822MessageId: async () => ({ kind: "none" as const }),
+    confirmDraftCreation,
+    withTransaction,
+    classifyGmailMutationError,
+    isStaleCommandClaimError: (error: unknown) => error instanceof StaleCommandClaimError,
+    ...overrides
+  };
+}
+
+async function uncertainDraft(data: Awaited<ReturnType<typeof fixture>>) {
+  const created = await createDraftCommand(data.mailboxId); const claim = await claimCommand(created.id); assert.ok(claim);
+  await withTransaction((client) => markProviderExecutionStarted(client, created.id, claim.claimId));
+  await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [created.id]); await recoverExpiredLeases();
+  return created;
+}
+
+test("read-only draft recovery resolves one match and safely retains no-match or ambiguous outcomes", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const one = await uncertainDraft(data);
+    assert.deepEqual(await verifyCreateDraftRecovery(one.id, recoveryExecutor({ findDraftByRfc822MessageId: async () => ({ kind: "one", draft: { draftId: "recovered-draft", messageId: "recovered-message", threadId: "recovered-thread" } }) })), { outcome: "succeeded" });
+    assert.equal((await commandState(one.id)).status, "succeeded");
+    assert.equal((await pool.query<{ gmail_draft_id: string; status: string }>("SELECT gmail_draft_id,status FROM drafts WHERE id=$1", [one.draftId])).rows[0].gmail_draft_id, "recovered-draft");
+    assert.deepEqual(await verifyCreateDraftRecovery(one.id, recoveryExecutor()), { outcome: "not_claimed" });
+    const audit = await pool.query<{ metadata: unknown }>("SELECT metadata FROM audit_events WHERE object_id=$1", [one.id]);
+    const serialized = JSON.stringify(audit.rows); for (const secret of ["recipient@example.test", "Draft subject", "Draft body", "<", "recovered-draft", "recovered-message"]) assert.equal(serialized.includes(secret), false, secret);
+
+    const none = await uncertainDraft(data); assert.deepEqual(await verifyCreateDraftRecovery(none.id, recoveryExecutor()), { outcome: "not_found" }); assert.equal((await commandState(none.id)).status, "recovery_required");
+    const ambiguous = await uncertainDraft(data); assert.deepEqual(await verifyCreateDraftRecovery(ambiguous.id, recoveryExecutor({ findDraftByRfc822MessageId: async () => ({ kind: "ambiguous" }) })), { outcome: "ambiguous" }); assert.equal((await commandState(ambiguous.id)).status, "recovery_required");
+
+    const rollback = await uncertainDraft(data);
+    assert.deepEqual(await verifyCreateDraftRecovery(rollback.id, recoveryExecutor({ findDraftByRfc822MessageId: async () => ({ kind: "one", draft: { draftId: "rollback-draft", messageId: "rollback-message", threadId: null } }), confirmDraftCreation: async () => { throw new Error("projection failed"); } })), { outcome: "unavailable" });
+    assert.equal((await commandState(rollback.id)).status, "recovery_required");
+    assert.equal((await pool.query<{ gmail_draft_id: string | null }>("SELECT gmail_draft_id FROM drafts WHERE id=$1", [rollback.draftId])).rows[0].gmail_draft_id, null);
+
+    const stale = await uncertainDraft(data); const claim = await claimCreateDraftRecovery(stale.id); assert.ok(claim); await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [stale.id]);
+    await assert.rejects(() => withTransaction((client) => completeRecoveredDraftCreation(client, stale.id, claim.claimId, async () => undefined)), StaleCommandClaimError);
+    const reclaimed = await claimCreateDraftRecovery(stale.id); assert.ok(reclaimed); assert.notEqual(reclaimed.claimId, claim.claimId);
   } finally { await data.cleanup(); }
 });
 

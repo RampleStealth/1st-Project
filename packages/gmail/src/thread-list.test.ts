@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, createDraft, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel } from "./index.js";
+import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -71,4 +71,18 @@ test("draft adapter creates and reads only normalized Gmail draft references", a
     { userId: "me", id: "gmail-draft", format: "metadata" }
   ]);
   assert.equal(JSON.stringify(created).includes("never-returned"), false);
+});
+
+test("draft Message-ID verification searches only Gmail drafts and returns normalized cardinality", async () => {
+  const calls: unknown[] = [];
+  const gmail = { users: { drafts: {
+    list: async (input: unknown) => { calls.push(input); return { data: { drafts: [{ id: "draft-one" }] } }; },
+    get: async (input: unknown) => { calls.push(input); return { data: { id: "draft-one", message: { id: "message-one", threadId: "thread-one", payload: { body: { data: "never-returned" } } } } }; }
+  } } };
+  assert.deepEqual(await findDraftByRfc822MessageId(gmail as never, "<stable@example.test>"), { kind: "one", draft: { draftId: "draft-one", messageId: "message-one", threadId: "thread-one" } });
+  assert.deepEqual(calls, [{ userId: "me", q: "rfc822msgid:<stable@example.test>", maxResults: 3 }, { userId: "me", id: "draft-one", format: "metadata" }]);
+  const none = { users: { drafts: { list: async () => ({ data: { drafts: [] } }) } } };
+  const multiple = { users: { drafts: { list: async () => ({ data: { drafts: [{ id: "one" }, { id: "two" }] } }) } } };
+  assert.deepEqual(await findDraftByRfc822MessageId(none as never, "<stable@example.test>"), { kind: "none" });
+  assert.deepEqual(await findDraftByRfc822MessageId(multiple as never, "<stable@example.test>"), { kind: "ambiguous" });
 });
