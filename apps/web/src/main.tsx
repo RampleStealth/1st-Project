@@ -1,10 +1,11 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { connectionHealth, type MailboxSummary } from "./mailbox-health.js";
 import { ThreadList } from "./thread-list.js";
 import { ThreadReader } from "./thread-reader.js";
 import { DraftComposer } from "./draft-composer.js";
+import { focusFirstThreadRow, focusThreadRow } from "./workspace-focus.js";
 import "./styles.css";
 
 const views = [
@@ -42,20 +43,27 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
   </aside>;
 }
 
-function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
+export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   const { view = "inbox", threadId } = useParams();
   const navigate = useNavigate();
   const selectedView = views.some(([key]) => key === view) ? view : "inbox";
+  const lastSelectedThreadId = useRef<string | null>(null);
+  useEffect(() => { if (threadId) lastSelectedThreadId.current = threadId; }, [threadId]);
+  const closeReader = useCallback((afterArchive = false) => {
+    const priorThreadId = lastSelectedThreadId.current;
+    navigate(`/mail/${mailbox.id}/${selectedView}`);
+    requestAnimationFrame(() => afterArchive ? focusFirstThreadRow() : priorThreadId && focusThreadRow(priorThreadId));
+  }, [mailbox.id, navigate, selectedView]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
       if (event.key.toLowerCase() === "c" && selectedView === "drafts" && !threadId) { event.preventDefault(); document.querySelector<HTMLButtonElement>("[data-new-draft]")?.click(); }
-      if (event.key === "Escape" && threadId) { event.preventDefault(); navigate(`/mail/${mailbox.id}/${selectedView}`); }
+      if (event.key === "Escape" && threadId) { event.preventDefault(); closeReader(); }
     };
     window.addEventListener("keydown", onKeyDown); return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mailbox.id, navigate, selectedView, threadId]);
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className="mail-layout"><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={() => window.dispatchEvent(new Event("aio:request-write-permission"))} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={()=>navigate(`/mail/${mailbox.id}/inbox`)} onUnread={()=>undefined} />}</aside></div></main></div>;
+  }, [closeReader, mailbox.id, selectedView, threadId]);
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId ? " mail-layout--reader-open" : ""}`}><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={() => window.dispatchEvent(new Event("aio:request-write-permission"))} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} />}</aside></div></main></div>;
 }
 
 function App() {
