@@ -35,7 +35,7 @@ export type ClaimedOutboxEvent = { id: string; aggregate_id: string; command_typ
 /** Claims command outbox rows together with immutable dispatch metadata, avoiding a command lookup per event. */
 export async function claimOutboxEvents(limit=20, leaseSeconds=60, aggregateId?: string) { const claimId=randomUUID(); return withTransaction(async client=>{const rows=await client.query<ClaimedOutboxEvent>(`SELECT event.id,event.aggregate_id,command.command_type,command.correlation_id
   FROM outbox_events event
-  LEFT JOIN provider_commands command ON command.id=event.aggregate_id
+  JOIN provider_commands command ON command.id=event.aggregate_id
   WHERE event.published_at IS NULL AND (event.dispatch_lease_expires_at IS NULL OR event.dispatch_lease_expires_at<now()) AND event.event_type='provider_command.requested' AND ($2::uuid IS NULL OR event.aggregate_id=$2)
   ORDER BY event.created_at FOR UPDATE OF event SKIP LOCKED LIMIT $1`,[limit,aggregateId ?? null]); if(rows.rowCount) await client.query("UPDATE outbox_events SET dispatch_claim_id=$2,dispatch_claimed_at=now(),dispatch_lease_expires_at=now()+($3::text || ' seconds')::interval WHERE id=ANY($1::uuid[])",[rows.rows.map(x=>x.id),claimId,leaseSeconds]); return {claimId,events:rows.rows};}); }
 export async function markOutboxPublished(eventId:string,claimId:string){return Boolean((await pool.query("UPDATE outbox_events SET published_at=now(),dispatch_claim_id=NULL,dispatch_lease_expires_at=NULL WHERE id=$1 AND dispatch_claim_id=$2 AND published_at IS NULL",[eventId,claimId])).rowCount);}
