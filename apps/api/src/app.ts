@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { metrics } from "@aio/observability";
 import Fastify, { type FastifyBaseLogger } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -32,7 +33,7 @@ export type ApiAppDependencies = {
   ensureMailboxSyncState: (mailboxAccountId: string) => Promise<unknown>;
   recordPendingHistory: (mailboxAccountId: string, historyId: string) => Promise<void>;
   enqueueSync: (job: SyncJob) => Promise<unknown>;
-  insertProviderCommand: (input: { mailboxId: string; commandType: "archive_thread" | "mark_thread_unread"; encryptedPayload: string; fingerprint: string; idempotencyKey: string }) => Promise<{ id: string; commandType: string; status: string }>;
+  insertProviderCommand: (input: { mailboxId: string; commandType: "archive_thread" | "mark_thread_unread"; encryptedPayload: string; fingerprint: string; idempotencyKey: string; correlationId?: string }) => Promise<{ id: string; commandType: string; status: string }>;
   createDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
   updateDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
   sendDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
@@ -75,7 +76,13 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
   await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
   await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods: ["GET", "POST", "PUT", "DELETE"] });
 
-  app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); });
+  app.addHook("onRequest", async (request) => { request.headers["x-correlation-id"] ??= randomUUID(); (request as any).telemetryStartedAt = Date.now(); });
+  app.addHook("onResponse", async (request, reply) => {
+    const duration = Math.max(0, Date.now() - Number((request as any).telemetryStartedAt ?? Date.now()));
+    const route = request.routeOptions.url ?? "unmatched";
+    metrics().counter("api_requests_total", 1, { method: request.method, route, status: reply.statusCode });
+    metrics().histogram("api_request_duration_ms", duration, { method: request.method, route, status: reply.statusCode });
+  });
   registerHealthRoutes(app);
   registerMailboxWorkspaceRoutes(app, { config, pool, withTransaction, sanitizedThreadCache, findMailboxForUser });
   registerProviderCommandRoutes(app, { pool });

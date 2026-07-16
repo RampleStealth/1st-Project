@@ -3,6 +3,7 @@ import { CodeChallengeMethod } from "google-auth-library";
 import type { AppConfig } from "@aio/config";
 import { decryptSecret } from "@aio/security";
 import type { MailboxView, SyncErrorCode } from "@aio/contracts";
+import { metrics, observe } from "@aio/observability";
 export * from "./thread-display.js";
 export * from "./draft-mime.js";
 
@@ -54,7 +55,7 @@ export function gmailForMailbox(config: AppConfig, encryptedRefreshToken: string
 }
 
 export async function initialThreadIds(gmail: gmail_v1.Gmail, maxResults = 500): Promise<string[]> {
-  const response = await gmail.users.threads.list({ userId: "me", maxResults, includeSpamTrash: false });
+  const response = await observeGmail("threads.list", () => gmail.users.threads.list({ userId: "me", maxResults, includeSpamTrash: false }));
   return response.data.threads?.flatMap((thread) => thread.id ? [thread.id] : []) ?? [];
 }
 
@@ -64,7 +65,7 @@ export async function changedMessageIds(gmail: gmail_v1.Gmail, startHistoryId: s
   let pageToken: string | undefined;
   let latestHistoryId: string | undefined;
   do {
-    const response = await gmail.users.history.list({ userId: "me", startHistoryId, pageToken, historyTypes: ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"] });
+    const response = await observeGmail("history.list", () => gmail.users.history.list({ userId: "me", startHistoryId, pageToken, historyTypes: ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"] }));
     latestHistoryId = response.data.historyId ?? latestHistoryId;
     for (const history of response.data.history ?? []) {
       for (const entry of [...(history.messagesAdded ?? []), ...(history.labelsAdded ?? []), ...(history.labelsRemoved ?? [])]) {
@@ -79,33 +80,38 @@ export async function changedMessageIds(gmail: gmail_v1.Gmail, startHistoryId: s
 }
 
 export async function getMessage(gmail: gmail_v1.Gmail, id: string) {
-  return (await gmail.users.messages.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "Subject", "Date"] })).data;
+  return (await observeGmail("messages.get", () => gmail.users.messages.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "Subject", "Date"] }))).data;
 }
 
 export async function getThread(gmail: gmail_v1.Gmail, id: string) {
-  return (await gmail.users.threads.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "To", "Cc", "Subject", "Date"] })).data;
+  return (await observeGmail("threads.get", () => gmail.users.threads.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "To", "Cc", "Subject", "Date"] }))).data;
 }
 
 /** Full structured MIME only; never request Gmail's raw message format. */
 export async function getThreadFull(gmail: gmail_v1.Gmail, id: string) {
-  return (await gmail.users.threads.get({ userId: "me", id, format: "full" })).data;
+  return (await observeGmail("threads.get", () => gmail.users.threads.get({ userId: "me", id, format: "full" }))).data;
 }
-export async function archiveThread(gmail: gmail_v1.Gmail, id: string) { await gmail.users.threads.modify({ userId:"me", id, requestBody:{ removeLabelIds:["INBOX"] } }); }
-export async function markThreadUnread(gmail: gmail_v1.Gmail, id: string) { await gmail.users.threads.modify({ userId:"me", id, requestBody:{ addLabelIds:["UNREAD"] } }); }
+export async function archiveThread(gmail: gmail_v1.Gmail, id: string) { await observeGmail("threads.modify", () => gmail.users.threads.modify({ userId:"me", id, requestBody:{ removeLabelIds:["INBOX"] } })); }
+export async function markThreadUnread(gmail: gmail_v1.Gmail, id: string) { await observeGmail("threads.modify", () => gmail.users.threads.modify({ userId:"me", id, requestBody:{ addLabelIds:["UNREAD"] } })); }
 
 export type GmailDraftReference = { draftId: string; messageId: string; threadId: string | null };
 
 /** Creates a Gmail draft from the application-owned, validated RFC 5322 MIME document. */
 export async function createDraft(gmail: gmail_v1.Gmail, mime: string): Promise<GmailDraftReference> {
-  const response = await gmail.users.drafts.create({ userId: "me", requestBody: { message: { raw: Buffer.from(mime, "utf8").toString("base64url") } } });
+  const response = await observeGmail("draft.create", () => gmail.users.drafts.create({ userId: "me", requestBody: { message: { raw: Buffer.from(mime, "utf8").toString("base64url") } } }));
   const data = response.data;
   if (!data.id || !data.message?.id) throw new Error("Gmail did not confirm a draft identifier");
   return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
 }
 
+async function observeGmail<T>(operation: string, action: () => Promise<T>): Promise<T> {
+  try { const value = await observe(`gmail.${operation}`, action, {}, "gmail_request_duration_ms"); metrics().counter("gmail_requests_total", 1, { operation, result: "success" }); return value; }
+  catch (error) { metrics().counter("gmail_requests_total", 1, { operation, result: "failure" }); metrics().counter("gmail_errors_total", 1, { operation, error_code: classifyGmailMutationError(error) }); throw error; }
+}
+
 /** Replaces only the specified Gmail Draft resource with application-built MIME. */
 export async function updateDraft(gmail: gmail_v1.Gmail, draftId: string, mime: string): Promise<GmailDraftReference> {
-  const response = await gmail.users.drafts.update({ userId: "me", id: draftId, requestBody: { message: { raw: Buffer.from(mime, "utf8").toString("base64url") } } });
+  const response = await observeGmail("draft.update", () => gmail.users.drafts.update({ userId: "me", id: draftId, requestBody: { message: { raw: Buffer.from(mime, "utf8").toString("base64url") } } }));
   const data = response.data;
   if (!data.id || !data.message?.id) throw new Error("Gmail did not confirm an updated draft identifier");
   return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
@@ -113,7 +119,7 @@ export async function updateDraft(gmail: gmail_v1.Gmail, draftId: string, mime: 
 
 /** Metadata-only lookup; raw MIME and draft bodies are deliberately never requested. */
 export async function getDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<GmailDraftReference> {
-  const response = await gmail.users.drafts.get({ userId: "me", id: draftId, format: "metadata" });
+  const response = await observeGmail("draft.get", () => gmail.users.drafts.get({ userId: "me", id: draftId, format: "metadata" }));
   const data = response.data;
   if (!data.id || !data.message?.id) throw new Error("Gmail draft is unavailable");
   return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
@@ -123,7 +129,7 @@ export type GmailSentMessageReference = { messageId: string; threadId: string | 
 
 /** Sends only the already-confirmed Gmail Draft resource; MIME is never rebuilt here. */
 export async function sendDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<GmailSentMessageReference> {
-  const response = await gmail.users.drafts.send({ userId: "me", requestBody: { id: draftId } });
+  const response = await observeGmail("draft.send", () => gmail.users.drafts.send({ userId: "me", requestBody: { id: draftId } }));
   const data = response.data;
   if (!data.id) throw new Error("Gmail did not confirm a sent message identifier");
   const milliseconds = data.internalDate && /^\d+$/.test(data.internalDate) ? Number(data.internalDate) : NaN;
@@ -187,7 +193,7 @@ export function threadListLabel(view: MailboxView): string | undefined {
 export async function listThreads(gmail: gmail_v1.Gmail, view: MailboxView, pageToken: string | undefined, maxResults: number) {
   if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 100) throw new GmailPaginationValidationError();
   const label = threadListLabel(view);
-  const response = await gmail.users.threads.list({ userId: "me", labelIds: label ? [label] : undefined, pageToken, maxResults, includeSpamTrash: false });
+  const response = await observeGmail("threads.list", () => gmail.users.threads.list({ userId: "me", labelIds: label ? [label] : undefined, pageToken, maxResults, includeSpamTrash: false }));
   return { threadIds: response.data.threads?.flatMap((thread) => thread.id ? [thread.id] : []) ?? [], nextPageToken: response.data.nextPageToken ?? null };
 }
 
@@ -215,17 +221,17 @@ export async function hydrateThreadMetadata(gmail: gmail_v1.Gmail, threadIds: st
 }
 
 export async function currentHistoryId(gmail: gmail_v1.Gmail): Promise<string> {
-  const profile = await gmail.users.getProfile({ userId: "me" });
+  const profile = await observeGmail("profile.get", () => gmail.users.getProfile({ userId: "me" }));
   if (!profile.data.historyId) throw new Error("Gmail profile did not include history ID");
   return profile.data.historyId;
 }
 
 export async function watchMailbox(gmail: gmail_v1.Gmail, topicName: string) {
-  return (await gmail.users.watch({ userId: "me", requestBody: { topicName } })).data;
+  return (await observeGmail("watch", () => gmail.users.watch({ userId: "me", requestBody: { topicName } }))).data;
 }
 
 export async function stopWatch(gmail: gmail_v1.Gmail) {
-  await gmail.users.stop({ userId: "me" });
+  await observeGmail("stop", () => gmail.users.stop({ userId: "me" }));
 }
 
 export function classifyGmailError(error: unknown, operation: "history" | "resource" | "token"): SyncErrorCode {
