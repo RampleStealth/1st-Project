@@ -18,10 +18,28 @@ const configSchema = z.object({
   TOKEN_ENCRYPTION_KEY_BASE64: z.string().min(43),
   SESSION_SECRET: z.string().min(32),
   PORT: z.coerce.number().int().positive().default(4000),
-  WEB_PORT: z.coerce.number().int().positive().default(3000)
+  WEB_PORT: z.coerce.number().int().positive().default(3000),
+  WORKER_ID: z.string().uuid().optional(),
+  WORKER_RELEASE: z.string().min(1).max(128).optional(),
+  WORKER_SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(1_000).max(300_000).optional(),
+  WORKER_HEARTBEAT_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(300).optional(),
+  WORKER_HEARTBEAT_STALE_SECONDS: z.coerce.number().int().min(15).max(3_600).optional(),
+  WORKER_OUTBOX_INTERVAL_SECONDS: z.coerce.number().int().min(1).max(300).optional(),
+  WORKER_LEASE_RECOVERY_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(3_600).optional(),
+  WORKER_RECONCILIATION_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(3_600).optional(),
+  WORKER_WATCH_RENEWAL_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(86_400).optional(),
+  WORKER_ORPHAN_SCAN_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(3_600).optional(),
+  WORKER_OUTBOX_BATCH_LIMIT: z.coerce.number().int().min(1).max(100).optional(),
+  WORKER_RECONCILIATION_BATCH_LIMIT: z.coerce.number().int().min(1).max(500).optional(),
+  WORKER_ORPHAN_BATCH_LIMIT: z.coerce.number().int().min(1).max(500).optional(),
+  SYNC_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).optional(),
+  COMMAND_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(25).optional()
 }).superRefine((value, context) => {
   if (new URL(value.APP_ORIGIN).hostname !== new URL(value.API_ORIGIN).hostname) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["API_ORIGIN"], message: "APP_ORIGIN and API_ORIGIN must use the same hostname for secure session handling." });
+  }
+  if (value.WORKER_HEARTBEAT_STALE_SECONDS !== undefined && value.WORKER_HEARTBEAT_INTERVAL_SECONDS !== undefined && value.WORKER_HEARTBEAT_STALE_SECONDS <= value.WORKER_HEARTBEAT_INTERVAL_SECONDS) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["WORKER_HEARTBEAT_STALE_SECONDS"], message: "WORKER_HEARTBEAT_STALE_SECONDS must exceed the heartbeat interval." });
   }
 });
 
