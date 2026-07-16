@@ -119,6 +119,17 @@ export async function getDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<
   return { draftId: data.id, messageId: data.message.id, threadId: data.message.threadId ?? null };
 }
 
+export type GmailSentMessageReference = { messageId: string; threadId: string | null; sentAt: Date | null };
+
+/** Sends only the already-confirmed Gmail Draft resource; MIME is never rebuilt here. */
+export async function sendDraft(gmail: gmail_v1.Gmail, draftId: string): Promise<GmailSentMessageReference> {
+  const response = await gmail.users.drafts.send({ userId: "me", requestBody: { id: draftId } });
+  const data = response.data;
+  if (!data.id) throw new Error("Gmail did not confirm a sent message identifier");
+  const milliseconds = data.internalDate && /^\d+$/.test(data.internalDate) ? Number(data.internalDate) : NaN;
+  return { messageId: data.id, threadId: data.threadId ?? null, sentAt: Number.isFinite(milliseconds) ? new Date(milliseconds) : null };
+}
+
 export type DraftMessageIdSearch = { kind: "none" } | { kind: "one"; draft: GmailDraftReference } | { kind: "ambiguous" };
 /** Searches Gmail's draft resource only. It requests metadata, never raw MIME or message bodies. */
 export async function findDraftByRfc822MessageId(gmail: gmail_v1.Gmail, messageId: string): Promise<DraftMessageIdSearch> {
@@ -127,6 +138,20 @@ export async function findDraftByRfc822MessageId(gmail: gmail_v1.Gmail, messageI
   if (!ids.length) return { kind: "none" };
   if (ids.length > 1) return { kind: "ambiguous" };
   return { kind: "one", draft: await getDraft(gmail, ids[0]) };
+}
+
+export type SentMessageIdSearch = { kind: "none" } | { kind: "one"; message: GmailSentMessageReference } | { kind: "ambiguous" };
+/** Searches only Sent and requests metadata, never raw MIME or bodies. */
+export async function findSentMessageByRfc822MessageId(gmail: gmail_v1.Gmail, messageId: string): Promise<SentMessageIdSearch> {
+  const list = await gmail.users.messages.list({ userId: "me", labelIds: ["SENT"], q: `rfc822msgid:${messageId}`, maxResults: 3, includeSpamTrash: false });
+  const ids = list.data.messages?.flatMap((message) => message.id ? [message.id] : []) ?? [];
+  if (!ids.length) return { kind: "none" };
+  if (ids.length > 1) return { kind: "ambiguous" };
+  const response = await gmail.users.messages.get({ userId: "me", id: ids[0], format: "metadata" });
+  const data = response.data;
+  if (!data.id) throw new Error("Gmail sent message is unavailable");
+  const milliseconds = data.internalDate && /^\d+$/.test(data.internalDate) ? Number(data.internalDate) : NaN;
+  return { kind: "one", message: { messageId: data.id, threadId: data.threadId ?? null, sentAt: Number.isFinite(milliseconds) ? new Date(milliseconds) : null } };
 }
 
 export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required" | "reauthorization_required" | "rate_limited" | "transient_provider_failure" | "uncertain_provider_outcome" | "unknown_provider_failure";

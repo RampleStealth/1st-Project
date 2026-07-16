@@ -7,15 +7,19 @@ import {
   claimCommand,
   completeClaim,
   completeFailedMutation,
+  completeRecoveryRequiredMutation,
   completeConfirmedMutation,
   completeRecoveredDraftCreation,
+  completeRecoveredDraftSend,
   InvalidCommandPayloadError,
   claimCreateDraftRecovery,
+  claimSendDraftRecovery,
   claimUpdateDraftRecovery,
   loadClaimedCommand,
   markProviderExecutionStarted,
   recoverExpiredLeases,
   releaseCreateDraftRecoveryClaim,
+  releaseSendDraftRecoveryClaim,
   releaseUpdateDraftRecoveryClaim,
   scheduleRetryFromClaim,
   StaleCommandClaimError
@@ -24,8 +28,8 @@ import { classifyGmailMutationError } from "@aio/gmail";
 import { encryptSecret } from "@aio/security";
 import { encryptDraftContent, encryptProviderCommandPayload, fingerprintDraftContent } from "@aio/security";
 import { canonicalizeDraftContent, generateDraftMessageId } from "@aio/gmail";
-import { confirmDraftCreation, createDraftWithCommand, loadDraftForCreation, loadDraftForRecovery, loadDraftForUpdate, loadDraftForUpdateRecovery, confirmDraftUpdate, markDraftConflict, updateDraftWithCommand } from "@aio/database/repositories/draft";
-import { executeProviderCommand, verifyCreateDraftRecovery, verifyUpdateDraftRecovery } from "./provider-command-executor.js";
+import { confirmDraftCreation, confirmDraftSent, createDraftWithCommand, loadDraftForCreation, loadDraftForRecovery, loadDraftForSend, loadDraftForSendRecovery, loadDraftForUpdate, loadDraftForUpdateRecovery, confirmDraftUpdate, markDraftConflict, markDraftSendConflict, markDraftSendRecoveryRequired, sendDraftWithCommand, updateDraftWithCommand } from "@aio/database/repositories/draft";
+import { executeProviderCommand, verifyCreateDraftRecovery, verifySendDraftRecovery, verifyUpdateDraftRecovery } from "./provider-command-executor.js";
 
 const available = Boolean(process.env.DATABASE_URL && process.env.TOKEN_ENCRYPTION_KEY_BASE64);
 const key = process.env.TOKEN_ENCRYPTION_KEY_BASE64 ?? "";
@@ -83,7 +87,22 @@ async function updateDraftCommand(mailboxId: string, suffix = randomUUID()) {
   return { ...command, gmailDraftId, gmailMessageId, gmailThreadId };
 }
 
-function executor(overrides: Partial<Parameters<typeof executeProviderCommand>[1]> = {}) {
+async function sendDraftCommand(mailboxId: string, suffix = randomUUID()) {
+  const created = await createDraftCommand(mailboxId, suffix);
+  await pool.query("UPDATE provider_commands SET status='succeeded',completed_at=now() WHERE id=$1", [created.id]);
+  const gmailDraftId = `confirmed-send-draft-${suffix}`, gmailMessageId = `confirmed-send-message-${suffix}`;
+  await pool.query("UPDATE drafts SET status='ready',confirmed_revision=1,confirmed_content_fingerprint=content_fingerprint,gmail_draft_id=$2,gmail_draft_message_id=$3 WHERE id=$1", [created.draftId, gmailDraftId, gmailMessageId]);
+  const draft = await pool.query<{ content_fingerprint: string }>("SELECT content_fingerprint FROM drafts WHERE id=$1", [created.draftId]);
+  const command = await sendDraftWithCommand({
+    draftId: created.draftId, mailboxId, expectedRevision: 1,
+    encryptedCommandPayload: encryptProviderCommandPayload("send_draft", { version: 1, draftId: created.draftId, revision: 1 }, key),
+    requestFingerprint: `send_draft:${mailboxId}:${created.draftId}:1:${draft.rows[0].content_fingerprint}`,
+    idempotencyKey: `${suffix}-send`
+  });
+  return { ...command, gmailDraftId, gmailMessageId };
+}
+
+function executor(overrides: Partial<Parameters<typeof executeProviderCommand>[1]> = {}): Parameters<typeof executeProviderCommand>[1] {
   return {
     encryptionKey: key,
     claimCommand,
@@ -100,10 +119,16 @@ function executor(overrides: Partial<Parameters<typeof executeProviderCommand>[1
     updateDraft: async () => { throw new Error("draft adapter should not run for a thread command"); },
     confirmDraftUpdate: async () => { throw new Error("draft projection should not run for a thread command"); },
     markDraftConflict: async () => { throw new Error("draft projection should not run for a thread command"); },
+    loadDraftForSend: async () => { throw new Error("draft loader should not run for a thread command"); },
+    sendDraft: async () => { throw new Error("draft adapter should not run for a thread command"); },
+    confirmDraftSent: async () => { throw new Error("draft projection should not run for a thread command"); },
+    markDraftSendConflict: async () => { throw new Error("draft projection should not run for a thread command"); },
+    markDraftSendRecoveryRequired: async () => { throw new Error("draft projection should not run for a thread command"); },
     markProviderExecutionStarted,
     withTransaction,
     completeConfirmedMutation,
     completeFailedMutation,
+    completeRecoveryRequiredMutation,
     scheduleRetryFromClaim,
     completeClaim,
     classifyGmailMutationError,
@@ -416,10 +441,66 @@ test("worker error handling retries only safe failures and requires recovery for
     let gmailCalled = false;
     const unsupported = await command(data.mailboxId, "send_draft", "archive-thread");
     await pool.query("UPDATE provider_commands SET encrypted_payload='not-a-valid-payload' WHERE id=$1", [unsupported.id]);
-    assert.deepEqual(await executeProviderCommand(unsupported.id, executor({ archiveThread: async () => { gmailCalled = true; } })), { outcome: "unsupported" });
-    assert.equal((await commandState(unsupported.id)).failure_code, "unsupported_command");
+    assert.deepEqual(await executeProviderCommand(unsupported.id, executor({ archiveThread: async () => { gmailCalled = true; } })), { outcome: "failed" });
+    assert.equal((await commandState(unsupported.id)).failure_code, "invalid_command_payload");
     assert.equal(gmailCalled, false);
   } finally {
     await data.cleanup();
   }
+});
+
+test("send preflights the confirmed Gmail draft, marks execution, and atomically records confirmed send", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const sent = await sendDraftCommand(data.mailboxId);
+    const calls: string[] = [];
+    assert.deepEqual(await executeProviderCommand(sent.id, executor({
+      loadDraftForSend,
+      getDraft: async () => { calls.push("preflight"); return { draftId: sent.gmailDraftId, messageId: sent.gmailMessageId, threadId: null }; },
+      sendDraft: async (_gmail, draftId) => { calls.push(`send:${draftId}`); const marker = await pool.query<{ provider_execution_started_at: Date | null }>("SELECT provider_execution_started_at FROM provider_commands WHERE id=$1", [sent.id]); assert.ok(marker.rows[0].provider_execution_started_at); return { messageId: "sent-message", threadId: "sent-thread", sentAt: new Date(1_000) }; },
+      confirmDraftSent,
+      markDraftSendConflict,
+      markDraftSendRecoveryRequired
+    })), { outcome: "succeeded" });
+    assert.deepEqual(calls, ["preflight", `send:${sent.gmailDraftId}`]);
+    const draft = await pool.query<{ status: string; sent_gmail_message_id: string; gmail_draft_id: string | null }>("SELECT status,sent_gmail_message_id,gmail_draft_id FROM drafts WHERE id=$1", [sent.draftId]);
+    assert.deepEqual(draft.rows[0], { status: "sent", sent_gmail_message_id: "sent-message", gmail_draft_id: null });
+    assert.equal((await commandState(sent.id)).status, "succeeded");
+
+    const mismatch = await sendDraftCommand(data.mailboxId); let sentCalled = false;
+    assert.deepEqual(await executeProviderCommand(mismatch.id, executor({ loadDraftForSend, getDraft: async () => ({ draftId: mismatch.gmailDraftId, messageId: "changed-elsewhere", threadId: null }), sendDraft: async () => { sentCalled = true; return { messageId: "unexpected", threadId: null, sentAt: null }; }, markDraftSendConflict })), { outcome: "conflict" });
+    assert.equal(sentCalled, false);
+    assert.equal((await pool.query<{ status: string }>("SELECT status FROM drafts WHERE id=$1", [mismatch.draftId])).rows[0].status, "conflict");
+  } finally { await data.cleanup(); }
+});
+
+test("uncertain sends become recovery-required and read-only Sent verification resolves only one match", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const uncertain = await sendDraftCommand(data.mailboxId);
+    assert.deepEqual(await executeProviderCommand(uncertain.id, executor({ loadDraftForSend, getDraft: async () => ({ draftId: uncertain.gmailDraftId, messageId: uncertain.gmailMessageId, threadId: null }), sendDraft: async () => { throw { request: {} }; }, markDraftSendRecoveryRequired })), { outcome: "recovery_required" });
+    assert.equal((await commandState(uncertain.id)).status, "recovery_required");
+    assert.equal((await pool.query<{ status: string }>("SELECT status FROM drafts WHERE id=$1", [uncertain.draftId])).rows[0].status, "recovery_required");
+    let sendCalled = false;
+    assert.deepEqual(await verifySendDraftRecovery(uncertain.id, {
+      claimSendDraftRecovery,
+      releaseSendDraftRecoveryClaim,
+      completeRecoveredDraftSend,
+      loadDraftForSendRecovery,
+      findMailboxById,
+      gmailForMailbox: () => ({}) as never,
+      findSentMessageByRfc822MessageId: async () => ({ kind: "one", message: { messageId: "verified-sent", threadId: "verified-thread", sentAt: new Date(2_000) } }),
+      getDraft: async () => { throw new Error("draft check should not run for one sent match"); },
+      confirmDraftSent,
+      withTransaction,
+      classifyGmailMutationError,
+      isStaleCommandClaimError: (error: unknown) => error instanceof StaleCommandClaimError
+    }), { outcome: "succeeded" });
+    assert.equal(sendCalled, false);
+    assert.equal((await commandState(uncertain.id)).status, "succeeded");
+    const noMatch = await sendDraftCommand(data.mailboxId);
+    const claim = await claimCommand(noMatch.id); assert.ok(claim); await withTransaction((client) => markProviderExecutionStarted(client, noMatch.id, claim.claimId)); await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [noMatch.id]); await recoverExpiredLeases(); await pool.query("UPDATE drafts SET status='recovery_required' WHERE id=$1", [noMatch.draftId]);
+    assert.deepEqual(await verifySendDraftRecovery(noMatch.id, { claimSendDraftRecovery, releaseSendDraftRecoveryClaim, completeRecoveredDraftSend, loadDraftForSendRecovery, findMailboxById, gmailForMailbox: () => ({}) as never, findSentMessageByRfc822MessageId: async () => ({ kind: "none" }), getDraft: async () => ({ draftId: noMatch.gmailDraftId, messageId: noMatch.gmailMessageId, threadId: null }), confirmDraftSent, withTransaction, classifyGmailMutationError, isStaleCommandClaimError: (error: unknown) => error instanceof StaleCommandClaimError }), { outcome: "not_confirmed" });
+    assert.equal((await commandState(noMatch.id)).status, "recovery_required");
+  } finally { await data.cleanup(); }
 });

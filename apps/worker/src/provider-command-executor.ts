@@ -4,14 +4,14 @@ import { InvalidCommandPayloadError, type LoadedClaimedCommand } from "@aio/data
 import type { gmail_v1 } from "googleapis";
 import type { PoolClient } from "pg";
 import type { GmailMutationErrorCode } from "@aio/gmail";
-import type { GmailDraftReference } from "@aio/gmail";
+import type { GmailDraftReference, GmailSentMessageReference, SentMessageIdSearch } from "@aio/gmail";
 import type { DraftMessageIdSearch } from "@aio/gmail";
 import type { StoredDraft } from "@aio/database/repositories/draft";
 import { buildDraftMime } from "@aio/gmail";
 import { decryptDraftContent } from "@aio/security";
 
 type SupportedThreadCommand = Extract<ProviderCommandType, "archive_thread" | "mark_thread_unread">;
-type SupportedCommand = SupportedThreadCommand | "create_draft" | "update_draft";
+type SupportedCommand = SupportedThreadCommand | "create_draft" | "update_draft" | "send_draft";
 type CommandClaim = { claimId: string; command: { mailboxAccountId: string; commandType: ProviderCommandType } };
 type LoadedCommand = LoadedClaimedCommand;
 
@@ -38,10 +38,16 @@ export type ProviderCommandExecutorDependencies = {
   updateDraft: (gmail: gmail_v1.Gmail, draftId: string, mime: string) => Promise<GmailDraftReference>;
   confirmDraftUpdate: (client: PoolClient, draftId: string, commandId: string, revision: number, provider: GmailDraftReference) => Promise<void>;
   markDraftConflict: (client: PoolClient, draftId: string, commandId: string) => Promise<void>;
+  loadDraftForSend: (client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number) => Promise<StoredDraft>;
+  sendDraft: (gmail: gmail_v1.Gmail, draftId: string) => Promise<GmailSentMessageReference>;
+  confirmDraftSent: (client: PoolClient, draftId: string, commandId: string, revision: number, provider: GmailSentMessageReference) => Promise<void>;
+  markDraftSendConflict: (client: PoolClient, draftId: string, commandId: string) => Promise<void>;
+  markDraftSendRecoveryRequired: (client: PoolClient, draftId: string, commandId: string) => Promise<void>;
   markProviderExecutionStarted: (client: PoolClient, commandId: string, claimId: string) => Promise<void>;
   withTransaction: <T>(fn: (client: PoolClient) => Promise<T>) => Promise<T>;
   completeConfirmedMutation: (client: PoolClient, commandId: string, claimId: string, projection: () => Promise<void>, providerResult: string) => Promise<void>;
   completeFailedMutation: (client: PoolClient, commandId: string, claimId: string, failureCode: string, projection: () => Promise<void>) => Promise<void>;
+  completeRecoveryRequiredMutation: (client: PoolClient, commandId: string, claimId: string, failureCode: string, projection: () => Promise<void>) => Promise<void>;
   scheduleRetryFromClaim: (client: PoolClient, commandId: string, claimId: string, failureCode: string) => Promise<{ status: "failed" | "retryable"; delay: number }>;
   completeClaim: (commandId: string, claimId: string, status: "failed" | "recovery_required", failureCode?: string) => Promise<boolean>;
   classifyGmailMutationError: (error: unknown) => GmailMutationErrorCode;
@@ -49,7 +55,7 @@ export type ProviderCommandExecutorDependencies = {
 };
 
 function isSupportedCommand(commandType: ProviderCommandType): commandType is SupportedCommand {
-  return commandType === "archive_thread" || commandType === "mark_thread_unread" || commandType === "create_draft" || commandType === "update_draft";
+  return commandType === "archive_thread" || commandType === "mark_thread_unread" || commandType === "create_draft" || commandType === "update_draft" || commandType === "send_draft";
 }
 
 export async function applyConfirmedThreadProjection(
@@ -76,6 +82,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
   const claim = await dependencies.claimCommand(commandId);
   if (!claim) return { outcome: "not_claimed" as const };
   let providerExecutionStarted = false;
+  let sendDraftId: string | null = null;
 
   // Reject unsupported future command types before decrypting their payload.
   if (!isSupportedCommand(claim.command.commandType)) {
@@ -88,7 +95,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     const loaded = await dependencies.withTransaction((client) =>
       dependencies.loadClaimedCommand(client, commandId, claim.claimId, dependencies.encryptionKey)
     );
-    if (loaded.commandType !== "archive_thread" && loaded.commandType !== "mark_thread_unread" && loaded.commandType !== "create_draft" && loaded.commandType !== "update_draft") {
+    if (loaded.commandType !== "archive_thread" && loaded.commandType !== "mark_thread_unread" && loaded.commandType !== "create_draft" && loaded.commandType !== "update_draft" && loaded.commandType !== "send_draft") {
       return (await dependencies.completeClaim(commandId, claim.claimId, "failed", "unsupported_command"))
         ? { outcome: "unsupported" as const }
         : { outcome: "stale" as const };
@@ -158,6 +165,41 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
       ));
       return { outcome: "succeeded" as const };
     }
+    if (commandType === "send_draft") {
+      // Sending uses the provider-confirmed Draft resource only. No content is
+      // decrypted and no MIME is rebuilt at this irreversible boundary.
+      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForSend(client, commandId, mailbox.id, loaded.payload.draftId, loaded.payload.revision));
+      sendDraftId = draft.id;
+      let providerBefore: GmailDraftReference;
+      try { providerBefore = await dependencies.getDraft(gmail, draft.gmailDraftId!); }
+      catch (error) {
+        if (dependencies.classifyGmailMutationError(error) === "resource_deleted") {
+          await dependencies.withTransaction((client) => dependencies.completeFailedMutation(
+            client, commandId, claim.claimId, "resource_deleted",
+            () => dependencies.markDraftSendConflict(client, draft.id, commandId)
+          ));
+          return { outcome: "failed" as const };
+        }
+        throw error;
+      }
+      if (providerBefore.messageId !== draft.gmailDraftMessageId) {
+        await dependencies.withTransaction((client) => dependencies.completeFailedMutation(
+          client, commandId, claim.claimId, "external_draft_conflict",
+          () => dependencies.markDraftSendConflict(client, draft.id, commandId)
+        ));
+        return { outcome: "conflict" as const };
+      }
+      // Commit this marker before Gmail. Any post-marker failure is verified read-only, never resent.
+      await dependencies.withTransaction((client) => dependencies.markProviderExecutionStarted(client, commandId, claim.claimId));
+      providerExecutionStarted = true;
+      const provider = await dependencies.sendDraft(gmail, draft.gmailDraftId!);
+      await dependencies.withTransaction((client) => dependencies.completeConfirmedMutation(
+        client, commandId, claim.claimId,
+        () => dependencies.confirmDraftSent(client, draft.id, commandId, loaded.payload.revision, provider),
+        "send_draft"
+      ));
+      return { outcome: "succeeded" as const };
+    }
     const providerThreadId = loaded.payload.providerThreadId;
     if (commandType === "archive_thread") await dependencies.archiveThread(gmail, providerThreadId);
     else await dependencies.markThreadUnread(gmail, providerThreadId);
@@ -180,8 +222,17 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
         : { outcome: "stale" as const };
     }
     const code = dependencies.classifyGmailMutationError(error);
-    // Draft create/update calls may have reached Gmail once their durable execution marker exists. Never retry that uncertainty automatically.
+    // Draft create/update/send calls may have reached Gmail once their durable execution marker exists. Never retry that uncertainty automatically.
     if (providerExecutionStarted) {
+      if (claim.command.commandType === "send_draft") {
+        if (sendDraftId) {
+          await dependencies.withTransaction((client) => dependencies.completeRecoveryRequiredMutation(
+            client, commandId, claim.claimId, code,
+            () => dependencies.markDraftSendRecoveryRequired(client, sendDraftId!, commandId)
+          ));
+          return { outcome: "recovery_required" as const };
+        }
+      }
       return (await dependencies.completeClaim(commandId, claim.claimId, "recovery_required", code))
         ? { outcome: "recovery_required" as const }
         : { outcome: "stale" as const };
@@ -199,6 +250,13 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
       return (await dependencies.completeClaim(commandId, claim.claimId, "failed", code))
         ? { outcome: "failed" as const }
         : { outcome: "stale" as const };
+    }
+    if (claim.command.commandType === "send_draft" && sendDraftId) {
+      await dependencies.withTransaction((client) => dependencies.completeRecoveryRequiredMutation(
+        client, commandId, claim.claimId, code,
+        () => dependencies.markDraftSendRecoveryRequired(client, sendDraftId!, commandId)
+      ));
+      return { outcome: "recovery_required" as const };
     }
     return (await dependencies.completeClaim(commandId, claim.claimId, "recovery_required", code))
       ? { outcome: "recovery_required" as const }
@@ -284,6 +342,68 @@ export async function verifyUpdateDraftRecovery(commandId: string, dependencies:
     if (dependencies.isStaleCommandClaimError(error)) return { outcome: "stale" as const };
     const failure = dependencies.classifyGmailMutationError(error);
     await dependencies.releaseUpdateDraftRecoveryClaim(commandId, claim.claimId, failure);
+    return { outcome: failure === "write_scope_required" ? "permission_required" as const : failure === "reauthorization_required" ? "reauthorization_required" as const : "unavailable" as const };
+  }
+}
+
+export type SendDraftRecoveryDependencies = {
+  claimSendDraftRecovery: (commandId: string) => Promise<CommandClaim | null>;
+  releaseSendDraftRecoveryClaim: (commandId: string, claimId: string, failureCode: string) => Promise<boolean>;
+  completeRecoveredDraftSend: (client: PoolClient, commandId: string, claimId: string, projection: () => Promise<void>) => Promise<void>;
+  loadDraftForSendRecovery: (client: PoolClient, commandId: string, mailboxId: string) => Promise<{ id: string; revision: number; rfc822MessageId: string; gmailDraftId: string | null }>;
+  findMailboxById: (mailboxId: string) => Promise<MailboxAccount | null>;
+  gmailForMailbox: (mailbox: MailboxAccount) => gmail_v1.Gmail;
+  findSentMessageByRfc822MessageId: (gmail: gmail_v1.Gmail, messageId: string) => Promise<SentMessageIdSearch>;
+  getDraft: (gmail: gmail_v1.Gmail, draftId: string) => Promise<GmailDraftReference>;
+  confirmDraftSent: (client: PoolClient, draftId: string, commandId: string, revision: number, provider: GmailSentMessageReference) => Promise<void>;
+  withTransaction: <T>(fn: (client: PoolClient) => Promise<T>) => Promise<T>;
+  classifyGmailMutationError: (error: unknown) => GmailMutationErrorCode;
+  isStaleCommandClaimError: (error: unknown) => boolean;
+};
+
+/** Explicit, read-only verification for uncertain sends. It never calls Gmail drafts.send. */
+export async function verifySendDraftRecovery(commandId: string, dependencies: SendDraftRecoveryDependencies) {
+  const claim = await dependencies.claimSendDraftRecovery(commandId);
+  if (!claim) return { outcome: "not_claimed" as const };
+  try {
+    const mailbox = await dependencies.findMailboxById(claim.command.mailboxAccountId);
+    if (!mailbox || mailbox.status !== "active") {
+      await dependencies.releaseSendDraftRecoveryClaim(commandId, claim.claimId, "reauthorization_required");
+      return { outcome: "reauthorization_required" as const };
+    }
+    const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForSendRecovery(client, commandId, mailbox.id));
+    const gmail = dependencies.gmailForMailbox(mailbox);
+    const sent = await dependencies.findSentMessageByRfc822MessageId(gmail, draft.rfc822MessageId);
+    if (sent.kind === "one") {
+      await dependencies.withTransaction((client) => dependencies.completeRecoveredDraftSend(
+        client, commandId, claim.claimId,
+        () => dependencies.confirmDraftSent(client, draft.id, commandId, draft.revision, sent.message)
+      ));
+      return { outcome: "succeeded" as const };
+    }
+    if (sent.kind === "ambiguous") {
+      await dependencies.releaseSendDraftRecoveryClaim(commandId, claim.claimId, "ambiguous_sent_matches");
+      return { outcome: "ambiguous" as const };
+    }
+    if (!draft.gmailDraftId) {
+      await dependencies.releaseSendDraftRecoveryClaim(commandId, claim.claimId, "send_outcome_unknown");
+      return { outcome: "unknown" as const };
+    }
+    try {
+      await dependencies.getDraft(gmail, draft.gmailDraftId);
+      await dependencies.releaseSendDraftRecoveryClaim(commandId, claim.claimId, "send_not_confirmed");
+      return { outcome: "not_confirmed" as const };
+    } catch (error) {
+      if (dependencies.classifyGmailMutationError(error) === "resource_deleted") {
+        await dependencies.releaseSendDraftRecoveryClaim(commandId, claim.claimId, "send_outcome_unknown");
+        return { outcome: "unknown" as const };
+      }
+      throw error;
+    }
+  } catch (error) {
+    if (dependencies.isStaleCommandClaimError(error)) return { outcome: "stale" as const };
+    const failure = dependencies.classifyGmailMutationError(error);
+    await dependencies.releaseSendDraftRecoveryClaim(commandId, claim.claimId, failure);
     return { outcome: failure === "write_scope_required" ? "permission_required" as const : failure === "reauthorization_required" ? "reauthorization_required" as const : "unavailable" as const };
   }
 }

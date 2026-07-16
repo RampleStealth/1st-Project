@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, threadListLabel, updateDraft } from "./index.js";
+import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, sendDraft, threadListLabel, updateDraft } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -92,4 +92,27 @@ test("draft Message-ID verification searches only Gmail drafts and returns norma
   const multiple = { users: { drafts: { list: async () => ({ data: { drafts: [{ id: "one" }, { id: "two" }] } }) } } };
   assert.deepEqual(await findDraftByRfc822MessageId(none as never, "<stable@example.test>"), { kind: "none" });
   assert.deepEqual(await findDraftByRfc822MessageId(multiple as never, "<stable@example.test>"), { kind: "ambiguous" });
+});
+
+test("send uses only the Gmail Draft resource and Sent verification is metadata-only", async () => {
+  const calls: unknown[] = [];
+  const gmail = { users: {
+    drafts: { send: async (input: unknown) => { calls.push(input); return { data: { id: "sent-message", threadId: "sent-thread", internalDate: "1000", raw: "never-returned" } }; } },
+    messages: {
+      list: async (input: unknown) => { calls.push(input); return { data: { messages: [{ id: "sent-message" }] } }; },
+      get: async (input: unknown) => { calls.push(input); return { data: { id: "sent-message", threadId: "sent-thread", internalDate: "1000", raw: "never-returned" } }; }
+    }
+  } };
+  assert.deepEqual(await sendDraft(gmail as never, "gmail-draft"), { messageId: "sent-message", threadId: "sent-thread", sentAt: new Date(1000) });
+  assert.deepEqual(await findSentMessageByRfc822MessageId(gmail as never, "<stable@example.test>"), { kind: "one", message: { messageId: "sent-message", threadId: "sent-thread", sentAt: new Date(1000) } });
+  assert.deepEqual(calls, [
+    { userId: "me", requestBody: { id: "gmail-draft" } },
+    { userId: "me", labelIds: ["SENT"], q: "rfc822msgid:<stable@example.test>", maxResults: 3, includeSpamTrash: false },
+    { userId: "me", id: "sent-message", format: "metadata" }
+  ]);
+  assert.equal(JSON.stringify(await findSentMessageByRfc822MessageId(gmail as never, "<stable@example.test>")).includes("never-returned"), false);
+  const none = { users: { messages: { list: async () => ({ data: { messages: [] } }) } } };
+  const many = { users: { messages: { list: async () => ({ data: { messages: [{ id: "one" }, { id: "two" }] } }) } } };
+  assert.deepEqual(await findSentMessageByRfc822MessageId(none as never, "<stable@example.test>"), { kind: "none" });
+  assert.deepEqual(await findSentMessageByRfc822MessageId(many as never, "<stable@example.test>"), { kind: "ambiguous" });
 });

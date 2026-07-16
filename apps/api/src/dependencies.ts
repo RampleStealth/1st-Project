@@ -15,7 +15,10 @@ export type ProductionDependencyFactories = {
   insertProviderCommand: ApiAppDependencies["insertProviderCommand"];
   createDraftWithCommand: ApiAppDependencies["createDraftWithCommand"];
   updateDraftWithCommand: ApiAppDependencies["updateDraftWithCommand"];
+  sendDraftWithCommand: ApiAppDependencies["sendDraftWithCommand"];
   findDraftForUser: ApiAppDependencies["findDraftForUser"];
+  findSendRecoveryCommandForUser: ApiAppDependencies["findSendRecoveryCommandForUser"];
+  enqueueSendDraftVerification: ApiAppDependencies["enqueueSendDraftVerification"];
   isIdempotencyConflictError: ApiAppDependencies["isIdempotencyConflictError"];
   isDraftRevisionConflictError: ApiAppDependencies["isDraftRevisionConflictError"];
   isDraftStateConflictError: ApiAppDependencies["isDraftStateConflictError"];
@@ -32,9 +35,9 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     { findMailboxForUser },
     { ensureMailboxSyncState, recordPendingHistory },
     { insertProviderCommand, IdempotencyConflictError },
-    { createDraftWithCommand, updateDraftWithCommand, findDraftForUser, DraftRevisionConflictError, DraftStateConflictError, ActiveDraftCommandError },
+    { createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findSendRecoveryCommandForUser, DraftRevisionConflictError, DraftStateConflictError, ActiveDraftCommandError },
     { SanitizedThreadCache },
-    { enqueueSync },
+    { enqueueSync, enqueueSendDraftVerification },
     { logger }
   ] = await Promise.all([
     import("ioredis"),
@@ -63,7 +66,10 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     insertProviderCommand,
     createDraftWithCommand,
     updateDraftWithCommand,
+    sendDraftWithCommand,
     findDraftForUser,
+    findSendRecoveryCommandForUser,
+    enqueueSendDraftVerification,
     isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError,
     isDraftRevisionConflictError: (error) => error instanceof DraftRevisionConflictError,
     isDraftStateConflictError: (error) => error instanceof DraftStateConflictError,
@@ -92,7 +98,10 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       insertProviderCommand: factories.insertProviderCommand,
       createDraftWithCommand: factories.createDraftWithCommand,
       updateDraftWithCommand: factories.updateDraftWithCommand,
+      sendDraftWithCommand: factories.sendDraftWithCommand,
       findDraftForUser: factories.findDraftForUser,
+      findSendRecoveryCommandForUser: factories.findSendRecoveryCommandForUser,
+      enqueueSendDraftVerification: factories.enqueueSendDraftVerification,
       isIdempotencyConflictError: factories.isIdempotencyConflictError,
       isDraftRevisionConflictError: factories.isDraftRevisionConflictError,
       isDraftStateConflictError: factories.isDraftStateConflictError,

@@ -35,7 +35,10 @@ export type ApiAppDependencies = {
   insertProviderCommand: (input: { mailboxId: string; commandType: "archive_thread" | "mark_thread_unread"; encryptedPayload: string; fingerprint: string; idempotencyKey: string }) => Promise<{ id: string; commandType: string; status: string }>;
   createDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
   updateDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
+  sendDraftWithCommand: (input: any) => Promise<{ id: string; commandType: string; status: string; draftId: string }>;
   findDraftForUser: (mailboxId: string, draftId: string, userId: string) => Promise<any | null>;
+  findSendRecoveryCommandForUser: (mailboxId: string, draftId: string, userId: string) => Promise<{ id: string; status: string } | null>;
+  enqueueSendDraftVerification: (commandId: string) => Promise<unknown>;
   isIdempotencyConflictError: (error: unknown) => boolean;
   isDraftRevisionConflictError: (error: unknown) => boolean;
   isDraftStateConflictError: (error: unknown) => boolean;
@@ -58,7 +61,10 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
     insertProviderCommand,
     createDraftWithCommand,
     updateDraftWithCommand,
+    sendDraftWithCommand,
     findDraftForUser,
+    findSendRecoveryCommandForUser,
+    enqueueSendDraftVerification,
     isIdempotencyConflictError,
     isDraftRevisionConflictError,
     isDraftStateConflictError,
@@ -74,7 +80,7 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
   registerMailboxWorkspaceRoutes(app, { config, pool, withTransaction, sanitizedThreadCache, findMailboxForUser });
   registerProviderCommandRoutes(app, { pool });
   registerThreadMutationRoutes(app, { config, pool, findMailboxForUser, insertProviderCommand, isIdempotencyConflictError });
-  registerDraftRoutes(app, { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, findDraftForUser, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError });
+  registerDraftRoutes(app, { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findSendRecoveryCommandForUser, enqueueSendDraftVerification, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError });
   registerWritePermissionRoutes(app, { config, pool, redis, withTransaction, findMailboxForUser });
   registerMailboxLifecycleRoutes(app, { config, pool, withTransaction });
   registerAuthRoutes(app, { config, pool });
