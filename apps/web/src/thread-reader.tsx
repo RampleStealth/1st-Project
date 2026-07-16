@@ -6,6 +6,11 @@ import { readerIframePolicy, sandboxedDocument } from "./safe-iframe.js";
 type Message = { id: string; from: string | null; to: string[]; subject: string | null; sentAt: string | null; attachments: Array<{ filename: string; mimeType: string; size: number | null }>; plainText: string; sanitizedHtml: string | null; renderingState: "ready" | "fallback" | "failed" };
 type Thread = { id: string; messages: Message[] };
 type Command = { id: string; status: string; action: "archive" | "mark-unread"; threadId: string };
+const terminalCommandStatuses = new Set(["succeeded", "failed", "recovery_required", "permission_required", "reauthorization_required"]);
+
+export function mergePolledCommandStatus(command: Command, status: string): Command {
+  return terminalCommandStatuses.has(command.status) || command.status === status || (status === "pending" && command.status !== "pending") ? command : { ...command, status };
+}
 
 function commandMessage(status: string) {
   if (status === "retryable") return "Retrying this Gmail action…";
@@ -29,16 +34,24 @@ export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, 
   const subject = useMemo(() => decodeDisplayEntities(thread?.messages[0]?.subject) || "(No subject)", [thread]);
   useEffect(() => { setCommand((current) => current?.threadId === threadId ? current : null); }, [threadId]);
   useEffect(() => {
-    if (!command || ["succeeded", "failed", "recovery_required", "permission_required", "reauthorization_required"].includes(command.status)) return;
-    const timer = setTimeout(() => void fetch(`/v1/mailboxes/${mailboxId}/provider-commands/${command.id}`, { credentials: "include" }).then((response) => response.ok ? response.json() : null).then((value) => value && setCommand({ id: value.id, status: value.status, action: command.action, threadId: command.threadId })), 1000);
-    return () => clearTimeout(timer);
-  }, [command, mailboxId]);
+    if (!command || command.threadId !== threadId || terminalCommandStatuses.has(command.status)) return;
+    let active = true;
+    const current = command;
+    const timer = setTimeout(() => void fetch(`/v1/mailboxes/${mailboxId}/provider-commands/${current.id}`, { credentials: "include" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((value) => {
+        if (!active || !value || value.id !== current.id || typeof value.status !== "string") return;
+        setCommand((existing) => !existing || existing.id !== current.id || existing.threadId !== current.threadId ? existing : mergePolledCommandStatus(existing, value.status));
+      }), 1000);
+    return () => { active = false; clearTimeout(timer); };
+  }, [command, mailboxId, threadId]);
   useEffect(() => {
     if (command?.status !== "succeeded" || emittedConfirmationId.current === command.id) return;
     emittedConfirmationId.current = command.id;
     window.dispatchEvent(new CustomEvent("aio:thread-command-confirmed", { detail: { threadId: command.threadId, action: command.action } }));
     if (command.action === "archive" && view === "inbox" && threadId === command.threadId) onArchived?.();
     if (command.action === "mark-unread" && threadId === command.threadId) onUnread?.();
+    setCommand((current) => current?.id === command.id ? null : current);
   }, [command, onArchived, onUnread, threadId, view]);
   const mutate = async (action: "archive" | "mark-unread") => {
     if (!threadId || command) return;
