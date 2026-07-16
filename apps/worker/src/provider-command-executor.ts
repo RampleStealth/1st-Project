@@ -30,15 +30,15 @@ export type ProviderCommandExecutorDependencies = {
   gmailForMailbox: (mailbox: MailboxAccount) => gmail_v1.Gmail;
   archiveThread: (gmail: gmail_v1.Gmail, providerThreadId: string) => Promise<void>;
   markThreadUnread: (gmail: gmail_v1.Gmail, providerThreadId: string) => Promise<void>;
-  loadDraftForCreation: (client: PoolClient, commandId: string, mailboxId: string, draftId: string) => Promise<StoredDraft>;
+  loadDraftForCreation: (client: PoolClient, commandId: string, mailboxId: string, draftId: string, claimId: string) => Promise<StoredDraft>;
   createDraft: (gmail: gmail_v1.Gmail, mime: string) => Promise<GmailDraftReference>;
   confirmDraftCreation: (client: PoolClient, draftId: string, commandId: string, provider: GmailDraftReference) => Promise<void>;
-  loadDraftForUpdate: (client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number) => Promise<StoredDraft>;
+  loadDraftForUpdate: (client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number, claimId: string) => Promise<StoredDraft>;
   getDraft: (gmail: gmail_v1.Gmail, draftId: string) => Promise<GmailDraftReference>;
   updateDraft: (gmail: gmail_v1.Gmail, draftId: string, mime: string) => Promise<GmailDraftReference>;
   confirmDraftUpdate: (client: PoolClient, draftId: string, commandId: string, revision: number, provider: GmailDraftReference) => Promise<void>;
   markDraftConflict: (client: PoolClient, draftId: string, commandId: string) => Promise<void>;
-  loadDraftForSend: (client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number) => Promise<StoredDraft>;
+  loadDraftForSend: (client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number, claimId: string) => Promise<StoredDraft>;
   sendDraft: (gmail: gmail_v1.Gmail, draftId: string) => Promise<GmailSentMessageReference>;
   confirmDraftSent: (client: PoolClient, draftId: string, commandId: string, revision: number, provider: GmailSentMessageReference) => Promise<void>;
   markDraftSendConflict: (client: PoolClient, draftId: string, commandId: string) => Promise<void>;
@@ -115,7 +115,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
 
     const gmail = dependencies.gmailForMailbox(mailbox);
     if (commandType === "create_draft") {
-      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForCreation(client, commandId, mailbox.id, loaded.payload.draftId));
+      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForCreation(client, commandId, mailbox.id, loaded.payload.draftId, claim.claimId));
       // The encrypted content is only opened inside this verified worker execution path.
       const content = decryptDraftContent(draft, dependencies.encryptionKey);
       const mime = buildDraftMime(content, { messageId: draft.rfc822MessageId });
@@ -131,7 +131,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
       return { outcome: "succeeded" as const };
     }
     if (commandType === "update_draft") {
-      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForUpdate(client, commandId, mailbox.id, loaded.payload.draftId, loaded.payload.revision));
+      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForUpdate(client, commandId, mailbox.id, loaded.payload.draftId, loaded.payload.revision, claim.claimId));
       // Metadata preflight prevents us from overwriting a Gmail-native external change.
       let providerBefore: GmailDraftReference;
       try { providerBefore = await dependencies.getDraft(gmail, draft.gmailDraftId!); }
@@ -168,7 +168,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     if (commandType === "send_draft") {
       // Sending uses the provider-confirmed Draft resource only. No content is
       // decrypted and no MIME is rebuilt at this irreversible boundary.
-      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForSend(client, commandId, mailbox.id, loaded.payload.draftId, loaded.payload.revision));
+      const draft = await dependencies.withTransaction((client) => dependencies.loadDraftForSend(client, commandId, mailbox.id, loaded.payload.draftId, loaded.payload.revision, claim.claimId));
       sendDraftId = draft.id;
       let providerBefore: GmailDraftReference;
       try { providerBefore = await dependencies.getDraft(gmail, draft.gmailDraftId!); }

@@ -46,6 +46,9 @@ function ifMatchRevision(value: unknown): number | null {
   const revision = Number(match[1]);
   return Number.isSafeInteger(revision) ? revision : null;
 }
+function hasRequestBody(value: unknown) {
+  return value !== undefined;
+}
 
 export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, deps: Deps) {
   const { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findSendRecoveryCommandForUser, enqueueSendDraftVerification, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError } = deps;
@@ -95,7 +98,10 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
     if (!draft) return reply.code(404).send({ code: "draft_not_found" });
     try {
       const content = decryptDraftContent(draft, config.TOKEN_ENCRYPTION_KEY_BASE64);
-      return { id: draft.id, status: draft.status, revision: draft.revision, confirmedRevision: draft.confirmedRevision, recipientCount: draft.recipientCount, hasHtml: draft.hasHtml, createdAt: draft.createdAt, updatedAt: draft.updatedAt, ...content };
+      // This boolean permits only the already-existing, read-only send verification
+      // action after a reload; it does not reveal command identity or provider data.
+      const canVerifySend = draft.status === "recovery_required" && Boolean(await findSendRecoveryCommandForUser(request.params.mailboxId, request.params.draftId, user.id));
+      return { id: draft.id, status: draft.status, revision: draft.revision, confirmedRevision: draft.confirmedRevision, recipientCount: draft.recipientCount, hasHtml: draft.hasHtml, canVerifySend, createdAt: draft.createdAt, updatedAt: draft.updatedAt, ...content };
     } catch {
       return reply.code(422).send({ code: "draft_unavailable" });
     }
@@ -151,6 +157,7 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
     const user = await authenticatedUser(request, pool);
     if (!user) return reply.code(401).send({ code: "unauthenticated" });
     if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed" });
+    if (hasRequestBody(request.body)) return reply.code(400).send({ code: "invalid_draft_send_request" });
     const idempotencyKey = request.headers["idempotency-key"];
     if (!validIdempotencyKey(idempotencyKey)) return reply.code(400).send({ code: "invalid_idempotency_key" });
     const header = request.headers["if-match"];
@@ -190,6 +197,7 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
     const user = await authenticatedUser(request, pool);
     if (!user) return reply.code(401).send({ code: "unauthenticated" });
     if (!requireCsrf(request)) return reply.code(403).send({ code: "csrf_failed" });
+    if (hasRequestBody(request.body)) return reply.code(400).send({ code: "invalid_draft_verification_request" });
     const command = await findSendRecoveryCommandForUser(request.params.mailboxId, request.params.draftId, user.id);
     if (!command) return reply.code(409).send({ code: "send_verification_unavailable" });
     try { await enqueueSendDraftVerification(command.id); }

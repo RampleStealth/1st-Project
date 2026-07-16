@@ -227,34 +227,42 @@ export async function sendDraftWithCommand(input: SendDraftInput): Promise<Draft
 }
 
 /** Returns encrypted draft content only after the command claim and payload have been verified. */
-export async function loadDraftForCreation(client: PoolClient, commandId: string, mailboxId: string, draftId: string): Promise<StoredDraft> {
-  const result = await client.query<StoredDraft>(`SELECT ${draftColumns} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3 AND status='creating' FOR UPDATE`, [draftId, mailboxId, commandId]);
+export async function loadDraftForCreation(client: PoolClient, commandId: string, mailboxId: string, draftId: string, claimId: string): Promise<StoredDraft> {
+  const result = await client.query<StoredDraft>(
+    `SELECT ${draftColumns} FROM drafts
+     WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3 AND status='creating'
+       AND EXISTS (SELECT 1 FROM provider_commands c WHERE c.id=drafts.last_command_id AND c.status='running' AND c.active_claim_id=$4 AND c.lease_expires_at>now())
+     FOR UPDATE`,
+    [draftId, mailboxId, commandId, claimId]
+  );
   if (!result.rowCount) throw new Error("draft creation projection is unavailable");
   return result.rows[0];
 }
 
 /** Loads the encrypted desired revision only after command claim validation. */
-export async function loadDraftForUpdate(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number): Promise<StoredDraft> {
+export async function loadDraftForUpdate(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number, claimId: string): Promise<StoredDraft> {
   const result = await client.query<StoredDraft>(
     `SELECT ${draftColumns} FROM drafts
      WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3
        AND status='updating' AND revision=$4 AND gmail_draft_id IS NOT NULL AND gmail_draft_message_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM provider_commands c WHERE c.id=drafts.last_command_id AND c.status='running' AND c.active_claim_id=$5 AND c.lease_expires_at>now())
      FOR UPDATE`,
-    [draftId, mailboxId, commandId, revision]
+    [draftId, mailboxId, commandId, revision, claimId]
   );
   if (!result.rowCount) throw new Error("draft update projection is unavailable");
   return result.rows[0];
 }
 
 /** Loads only confirmed provider identity; send never decrypts or rebuilds content. */
-export async function loadDraftForSend(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number): Promise<StoredDraft> {
+export async function loadDraftForSend(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number, claimId: string): Promise<StoredDraft> {
   const result = await client.query<StoredDraft>(
     `SELECT ${draftColumns} FROM drafts
      WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3 AND status='sending'
        AND revision=$4 AND confirmed_revision=$4 AND content_fingerprint=confirmed_content_fingerprint
        AND gmail_draft_id IS NOT NULL AND gmail_draft_message_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM provider_commands c WHERE c.id=drafts.last_command_id AND c.status='running' AND c.active_claim_id=$5 AND c.lease_expires_at>now())
      FOR UPDATE`,
-    [draftId, mailboxId, commandId, revision]
+    [draftId, mailboxId, commandId, revision, claimId]
   );
   if (!result.rowCount) throw new Error("draft send projection is unavailable");
   return result.rows[0];
