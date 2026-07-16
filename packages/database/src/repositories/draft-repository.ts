@@ -44,6 +44,7 @@ type CreateDraftInput = EncryptedDraftContent & {
   encryptedCommandPayload: string;
   requestFingerprint: string;
   idempotencyKey: string;
+  correlationId?: string;
 };
 
 type UpdateDraftInput = EncryptedDraftContent & {
@@ -57,6 +58,7 @@ type UpdateDraftInput = EncryptedDraftContent & {
   encryptedCommandPayload: string;
   requestFingerprint: string;
   idempotencyKey: string;
+  correlationId?: string;
 };
 
 type SendDraftInput = {
@@ -66,6 +68,7 @@ type SendDraftInput = {
   encryptedCommandPayload: string;
   requestFingerprint: string;
   idempotencyKey: string;
+  correlationId?: string;
 };
 
 const draftColumns = `id,mailbox_account_id AS "mailboxAccountId",status,revision,confirmed_revision AS "confirmedRevision",rfc822_message_id AS "rfc822MessageId",content_fingerprint AS "contentFingerprint",confirmed_content_fingerprint AS "confirmedContentFingerprint",encrypted_recipients AS "encryptedRecipients",encrypted_subject AS "encryptedSubject",encrypted_plain_text AS "encryptedPlainText",encrypted_html AS "encryptedHtml",recipient_count AS "recipientCount",body_byte_count AS "bodyByteCount",has_html AS "hasHtml",gmail_draft_id AS "gmailDraftId",gmail_draft_message_id AS "gmailDraftMessageId",gmail_thread_id AS "gmailThreadId",created_at AS "createdAt",updated_at AS "updatedAt"`;
@@ -88,13 +91,13 @@ export async function createDraftWithCommand(input: CreateDraftInput): Promise<D
       [input.draftId, input.mailboxId, input.rfc822MessageId, input.contentFingerprint, input.encryptedRecipients, input.encryptedSubject, input.encryptedPlainText, input.encryptedHtml, input.recipientCount, input.bodyByteCount, input.hasHtml]
     );
     const command = await client.query<{ id: string; command_type: ProviderCommandType; status: ProviderCommandStatus }>(
-      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status)
-       VALUES($1,$2,'create_draft',$3,$4,$5,'pending') RETURNING id,command_type,status`,
-      [input.mailboxId, draft.rows[0].id, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey]
+      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status,correlation_id)
+       VALUES($1,$2,'create_draft',$3,$4,$5,'pending',COALESCE($6,gen_random_uuid())) RETURNING id,command_type,status`,
+      [input.mailboxId, draft.rows[0].id, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey, input.correlationId ?? null]
     );
     await client.query("UPDATE drafts SET last_command_id=$2,updated_at=now() WHERE id=$1", [draft.rows[0].id, command.rows[0].id]);
-    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('provider_command',$1,'provider_command.requested','{}')", [command.rows[0].id]);
-    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.create_requested','draft',$1,gen_random_uuid(),$2)", [draft.rows[0].id, JSON.stringify({ revision: 1 })]);
+    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('provider_command',$1,'provider_command.requested','{}',COALESCE($2,gen_random_uuid()))", [command.rows[0].id,input.correlationId ?? null]);
+    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.create_requested','draft',$1,COALESCE($2,gen_random_uuid()),$3)", [draft.rows[0].id,input.correlationId ?? null, JSON.stringify({ revision: 1 })]);
     return { id: command.rows[0].id, commandType: command.rows[0].command_type, status: command.rows[0].status, draftId: draft.rows[0].id };
   });
 }
@@ -161,13 +164,13 @@ export async function updateDraftWithCommand(input: UpdateDraftInput): Promise<D
     );
     if (!prepared.rowCount) throw new DraftRevisionConflictError();
     const command = await client.query<{ id: string; command_type: ProviderCommandType; status: ProviderCommandStatus }>(
-      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status)
-       VALUES($1,$2,'update_draft',$3,$4,$5,'pending') RETURNING id,command_type,status`,
-      [input.mailboxId, input.draftId, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey]
+      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status,correlation_id)
+       VALUES($1,$2,'update_draft',$3,$4,$5,'pending',COALESCE($6,gen_random_uuid())) RETURNING id,command_type,status`,
+      [input.mailboxId, input.draftId, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey,input.correlationId ?? null]
     );
     await client.query("UPDATE drafts SET last_command_id=$2,updated_at=now() WHERE id=$1", [input.draftId, command.rows[0].id]);
-    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('provider_command',$1,'provider_command.requested','{}')", [command.rows[0].id]);
-    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.update_requested','draft',$1,gen_random_uuid(),$2)", [input.draftId, JSON.stringify({ revision: nextRevision })]);
+    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('provider_command',$1,'provider_command.requested','{}',COALESCE($2,gen_random_uuid()))", [command.rows[0].id,input.correlationId ?? null]);
+    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.update_requested','draft',$1,COALESCE($2,gen_random_uuid()),$3)", [input.draftId,input.correlationId ?? null, JSON.stringify({ revision: nextRevision })]);
     return { id: command.rows[0].id, commandType: command.rows[0].command_type, status: command.rows[0].status, draftId: input.draftId };
   });
 }
@@ -211,17 +214,17 @@ export async function sendDraftWithCommand(input: SendDraftInput): Promise<Draft
     if (active.rowCount) throw new ActiveDraftCommandError();
 
     const command = await client.query<{ id: string; command_type: ProviderCommandType; status: ProviderCommandStatus }>(
-      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status)
-       VALUES($1,$2,'send_draft',$3,$4,$5,'pending') RETURNING id,command_type,status`,
-      [input.mailboxId, input.draftId, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey]
+      `INSERT INTO provider_commands(mailbox_account_id,draft_id,command_type,encrypted_payload,request_fingerprint,idempotency_key,status,correlation_id)
+       VALUES($1,$2,'send_draft',$3,$4,$5,'pending',COALESCE($6,gen_random_uuid())) RETURNING id,command_type,status`,
+      [input.mailboxId, input.draftId, input.encryptedCommandPayload, input.requestFingerprint, input.idempotencyKey,input.correlationId ?? null]
     );
     const updated = await client.query(
       "UPDATE drafts SET status='sending',last_command_id=$2,updated_at=now() WHERE id=$1 AND status='ready' AND revision=$3 AND confirmed_revision=$3 AND content_fingerprint=confirmed_content_fingerprint",
       [input.draftId, command.rows[0].id, input.expectedRevision]
     );
     if (!updated.rowCount) throw new DraftStateConflictError();
-    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('provider_command',$1,'provider_command.requested','{}')", [command.rows[0].id]);
-    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.send_requested','draft',$1,gen_random_uuid(),$2)", [input.draftId, JSON.stringify({ revision: input.expectedRevision })]);
+    await client.query("INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('provider_command',$1,'provider_command.requested','{}',COALESCE($2,gen_random_uuid()))", [command.rows[0].id,input.correlationId ?? null]);
+    await client.query("INSERT INTO audit_events(actor_type,event_type,object_type,object_id,correlation_id,metadata) VALUES('user','draft.send_requested','draft',$1,COALESCE($2,gen_random_uuid()),$3)", [input.draftId,input.correlationId ?? null, JSON.stringify({ revision: input.expectedRevision })]);
     return { id: command.rows[0].id, commandType: command.rows[0].command_type, status: command.rows[0].status, draftId: input.draftId };
   });
 }

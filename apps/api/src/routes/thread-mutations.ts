@@ -5,7 +5,7 @@ import type { ProviderCommandType } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
 import type { Pool } from "pg";
 import { encryptSecret } from "@aio/security";
-import { requireCsrf } from "../route-helpers/security.js";
+import { correlationId, requireCsrf } from "../route-helpers/security.js";
 import { authenticatedUser } from "../route-helpers/session.js";
 
 type ThreadCommandType = Extract<ProviderCommandType, "archive_thread" | "mark_thread_unread">;
@@ -18,7 +18,7 @@ type Deps = {
   config: AppConfig;
   pool: Pool;
   findMailboxForUser: (mailboxAccountId: string, userId: string) => Promise<MailboxAccount | null>;
-  insertProviderCommand: (input: { mailboxId: string; commandType: ThreadCommandType; encryptedPayload: string; fingerprint: string; idempotencyKey: string }) => Promise<CreatedCommand>;
+  insertProviderCommand: (input: { mailboxId: string; commandType: ThreadCommandType; encryptedPayload: string; fingerprint: string; idempotencyKey: string; correlationId?: string }) => Promise<CreatedCommand>;
   isIdempotencyConflictError: (error: unknown) => boolean;
 };
 
@@ -40,7 +40,7 @@ export function registerThreadMutationRoutes(
     if (!thread.rowCount) return reply.code(404).send({ code: "thread_not_found" });
     try {
       const fingerprint = createHash("sha256").update(`${type}:${request.params.threadId}`).digest("hex");
-      const command = await insertProviderCommand({ mailboxId: mailbox.id, commandType: type, encryptedPayload: encryptSecret(JSON.stringify({ providerThreadId: request.params.threadId }), config.TOKEN_ENCRYPTION_KEY_BASE64), fingerprint, idempotencyKey: key });
+      const command = await insertProviderCommand({ mailboxId: mailbox.id, commandType: type, encryptedPayload: encryptSecret(JSON.stringify({ providerThreadId: request.params.threadId }), config.TOKEN_ENCRYPTION_KEY_BASE64), fingerprint, idempotencyKey: key, correlationId: correlationId(request) });
       return reply.code(202).send({ id: command.id, commandType: command.commandType, status: command.status });
     } catch (error) {
       if (isIdempotencyConflictError(error)) return reply.code(409).send({ code: "idempotency_conflict" });

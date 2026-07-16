@@ -5,7 +5,7 @@ import { upsertThreadProjection } from "@aio/database/repositories/thread-projec
 import { getWorkerDatabaseDiagnostics, markWorkerDraining, markWorkerStopped, recordWorkerHeartbeat, recordWorkerStarted, repairInconsistentDraftStates } from "@aio/database/repositories/worker-runtime";
 import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailProviderError, sendDraft, updateDraft, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueProviderCommand, enqueueSync, gmailCommandsQueue, syncQueue } from "@aio/jobs";
-import { logger } from "@aio/observability";
+import { logger, metrics } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
 import { hasUnprocessedPendingHistory, shouldRetryForUnavailableHistory } from "./sync-state.js";
 import { claimCommand, claimCreateDraftRecovery, claimOutboxEvents, claimSendDraftRecovery, claimUpdateDraftRecovery, completeClaim, completeConfirmedMutation, completeFailedMutation, completeRecoveredDraftCreation, completeRecoveredDraftSend, completeRecoveryRequiredMutation, loadClaimedCommand, markOutboxPublished, markProviderExecutionStarted, recoverExpiredLeases, releaseCreateDraftRecoveryClaim, releaseOutboxClaim, releaseSendDraftRecoveryClaim, releaseUpdateDraftRecoveryClaim, scheduleRetryFromClaim, StaleCommandClaimError } from "@aio/database/repositories/provider-command";
@@ -92,18 +92,20 @@ export function createWorkerServices(config: AppConfig): WorkerRuntimeServices {
   return {
     processSync,
     processCommand: async (job) => {
+      const commandContext = { command_id: job.data.commandId, correlation_id: job.data.correlationId, operation: "provider_command" };
       if (job.name === "verify-create-draft") { await verifyCreateDraftRecovery(job.data.commandId, { ...commandDependencies, claimCreateDraftRecovery, releaseCreateDraftRecoveryClaim, completeRecoveredDraftCreation, loadDraftForRecovery, findDraftByRfc822MessageId }); return; }
       if (job.name === "verify-update-draft") { await verifyUpdateDraftRecovery(job.data.commandId, { ...commandDependencies, claimUpdateDraftRecovery, releaseUpdateDraftRecoveryClaim, loadDraftForUpdateRecovery }); return; }
       if (job.name === "verify-send-draft") { await verifySendDraftRecovery(job.data.commandId, { ...commandDependencies, claimSendDraftRecovery, releaseSendDraftRecoveryClaim, completeRecoveredDraftSend, loadDraftForSendRecovery, findSentMessageByRfc822MessageId }); return; }
       await executeProviderCommand(job.data.commandId, commandDependencies);
+      logger.info(commandContext, "provider command processed");
     },
     dispatchCommandOutbox: async (limit) => {
-      const claimed = await claimOutboxEvents(limit);
+      const claimed = await claimOutboxEvents(limit); metrics().gauge("unpublished_outbox", claimed.events.length);
       for (const event of claimed.events) try {
-        const command = await pool.query<{ command_type: import("@aio/contracts").ProviderCommandType }>("SELECT command_type FROM provider_commands WHERE id=$1", [event.aggregate_id]);
+        const command = await pool.query<{ command_type: import("@aio/contracts").ProviderCommandType; correlation_id: string }>("SELECT command_type,correlation_id FROM provider_commands WHERE id=$1", [event.aggregate_id]);
         if (!command.rowCount) { await releaseOutboxClaim(event.id, claimed.claimId); continue; }
-        await enqueueProviderCommand(event.aggregate_id, command.rows[0].command_type); await markOutboxPublished(event.id, claimed.claimId);
-      } catch { await releaseOutboxClaim(event.id, claimed.claimId); logger.warn({ eventId: event.id, errorCode: "command_outbox_enqueue_failed" }, "provider command outbox enqueue failed"); }
+        await enqueueProviderCommand(event.aggregate_id, command.rows[0].command_type, command.rows[0].correlation_id); await markOutboxPublished(event.id, claimed.claimId); metrics().counter("queue_enqueues_total", 1, { queue: "commands", result: "success" });
+      } catch { await releaseOutboxClaim(event.id, claimed.claimId); metrics().counter("queue_enqueues_total", 1, { queue: "commands", result: "failure" }); logger.warn({ errorCode: "command_outbox_enqueue_failed", operation: "command_outbox_dispatch" }, "provider command outbox enqueue failed"); }
     },
     recoverExpiredCommandLeases: async () => { await recoverExpiredLeases(); },
     renewWatches: async () => {

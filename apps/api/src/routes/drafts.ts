@@ -6,7 +6,7 @@ import type { DraftContentInput } from "@aio/contracts";
 import { canonicalizeDraftContent, generateDraftMessageId } from "@aio/gmail";
 import { decryptDraftContent, encryptDraftContent, encryptProviderCommandPayload, fingerprintDraftContent } from "@aio/security";
 import type { Pool } from "pg";
-import { requireCsrf } from "../route-helpers/security.js";
+import { correlationId, requireCsrf } from "../route-helpers/security.js";
 import { authenticatedUser } from "../route-helpers/session.js";
 
 type CreatedDraftCommand = { id: string; commandType: string; status: string; draftId: string };
@@ -19,13 +19,13 @@ type Deps = {
   findMailboxForUser: (mailboxAccountId: string, userId: string) => Promise<MailboxAccount | null>;
   createDraftWithCommand: (input: {
     draftId: string; mailboxId: string; rfc822MessageId: string; contentFingerprint: string; encryptedRecipients: string; encryptedSubject: string; encryptedPlainText: string; encryptedHtml: string | null;
-    recipientCount: number; bodyByteCount: number; hasHtml: boolean; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string;
+    recipientCount: number; bodyByteCount: number; hasHtml: boolean; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string; correlationId?: string;
   }) => Promise<CreatedDraftCommand>;
   updateDraftWithCommand: (input: {
     draftId: string; mailboxId: string; expectedRevision: number; contentFingerprint: string; encryptedRecipients: string; encryptedSubject: string; encryptedPlainText: string; encryptedHtml: string | null;
-    recipientCount: number; bodyByteCount: number; hasHtml: boolean; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string;
+    recipientCount: number; bodyByteCount: number; hasHtml: boolean; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string; correlationId?: string;
   }) => Promise<CreatedDraftCommand>;
-  sendDraftWithCommand: (input: { draftId: string; mailboxId: string; expectedRevision: number; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string }) => Promise<CreatedDraftCommand>;
+  sendDraftWithCommand: (input: { draftId: string; mailboxId: string; expectedRevision: number; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string; correlationId?: string }) => Promise<CreatedDraftCommand>;
   findDraftForUser: (mailboxId: string, draftId: string, userId: string) => Promise<StoredDraft | null>;
   findSendRecoveryCommandForUser: (mailboxId: string, draftId: string, userId: string) => Promise<{ id: string; status: string } | null>;
   enqueueSendDraftVerification: (commandId: string) => Promise<unknown>;
@@ -81,7 +81,7 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
         hasHtml: content.html !== null,
         encryptedCommandPayload: encryptProviderCommandPayload("create_draft", { version: 1, draftId }, config.TOKEN_ENCRYPTION_KEY_BASE64),
         requestFingerprint: createHash("sha256").update(`create_draft:${fingerprint}`).digest("hex"),
-        idempotencyKey
+        idempotencyKey, correlationId: correlationId(request)
       });
       return reply.code(202).send({ id: command.id, commandType: command.commandType, status: command.status, draftId: command.draftId });
     } catch (error) {
@@ -141,7 +141,7 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
         hasHtml: content.html !== null,
         encryptedCommandPayload: encryptProviderCommandPayload("update_draft", { version: 1, draftId: request.params.draftId, revision: nextRevision }, config.TOKEN_ENCRYPTION_KEY_BASE64),
         requestFingerprint: createHash("sha256").update(`update_draft:${request.params.draftId}:${expectedRevision}:${fingerprint}`).digest("hex"),
-        idempotencyKey
+        idempotencyKey, correlationId: correlationId(request)
       });
       return reply.code(202).send({ id: command.id, commandType: command.commandType, status: command.status, draftId: command.draftId, revision: nextRevision });
     } catch (error) {
@@ -181,7 +181,7 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
         expectedRevision,
         encryptedCommandPayload: encryptProviderCommandPayload("send_draft", { version: 1, draftId: draft.id, revision: expectedRevision }, config.TOKEN_ENCRYPTION_KEY_BASE64),
         requestFingerprint,
-        idempotencyKey
+        idempotencyKey, correlationId: correlationId(request)
       });
       return reply.code(202).send({ id: command.id, commandType: command.commandType, status: command.status, draftId: command.draftId, revision: expectedRevision });
     } catch (error) {

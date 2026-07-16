@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SyncJob } from "@aio/contracts";
+import { aggregateHealth, type Metrics } from "@aio/observability";
 
 export type WorkerLogger = {
   info: (context: Record<string, unknown>, message: string) => void;
@@ -18,7 +19,7 @@ export type SchedulerSnapshot = { running: boolean; lastStartedAt: Date | null; 
 
 export type WorkerRuntimeServices = {
   processSync: (job: SyncJob) => Promise<void>;
-  processCommand: (job: { name: string; data: { commandId: string } }) => Promise<void>;
+  processCommand: (job: { name: string; data: { commandId: string; correlationId?: string } }) => Promise<void>;
   dispatchCommandOutbox: (limit: number) => Promise<void>;
   recoverExpiredCommandLeases: () => Promise<void>;
   renewWatches: () => Promise<void>;
@@ -35,9 +36,10 @@ export type WorkerRuntimeServices = {
 
 export type WorkerRuntimeDependencies = {
   logger: WorkerLogger;
+  metrics?: Metrics;
   services: WorkerRuntimeServices;
   createSyncConsumer: (processor: (job: SyncJob) => Promise<void>) => WorkerConsumer;
-  createCommandConsumer: (processor: (job: { name: string; data: { commandId: string } }) => Promise<void>) => WorkerConsumer;
+  createCommandConsumer: (processor: (job: { name: string; data: { commandId: string; correlationId?: string } }) => Promise<void>) => WorkerConsumer;
   redis: { ping: () => Promise<unknown>; quit: () => Promise<unknown> };
   closeQueues: () => Promise<void>;
   closeDatabasePool?: () => Promise<void>;
@@ -103,11 +105,11 @@ function logScheduledFailure(runtime: WorkerRuntime, scheduler: SchedulerName, e
 function startScheduler(runtime: WorkerRuntime, name: SchedulerName, intervalMs: number, task: () => Promise<void>, runImmediately: boolean) {
   const scheduler = runtime.schedulers[name];
   const run = async () => {
-    if (runtime.status !== "running" || scheduler.running) return;
+    if (runtime.status !== "running" || scheduler.running) { if (scheduler.running) runtime.dependencies.metrics?.counter("scheduler_runs_total", 1, { scheduler: name, result: "skipped_overlap" }); return; }
     scheduler.running = true;
     scheduler.lastStartedAt = runtime.options.now();
-    try { await task(); scheduler.lastCompletedAt = runtime.options.now(); }
-    catch (error) { scheduler.lastFailedAt = runtime.options.now(); logScheduledFailure(runtime, name, error); }
+    try { await task(); scheduler.lastCompletedAt = runtime.options.now(); runtime.dependencies.metrics?.counter("scheduler_runs_total", 1, { scheduler: name, result: "success" }); runtime.dependencies.metrics?.histogram("scheduler_duration_ms", scheduler.lastCompletedAt.getTime() - scheduler.lastStartedAt.getTime(), { scheduler: name, result: "success" }); }
+    catch (error) { scheduler.lastFailedAt = runtime.options.now(); runtime.dependencies.metrics?.counter("scheduler_failures_total", 1, { scheduler: name }); logScheduledFailure(runtime, name, error); }
     finally { scheduler.running = false; }
   };
   scheduler.handle = runtime.options.setInterval(() => { void run(); }, intervalMs);
@@ -135,8 +137,18 @@ export async function startWorkerRuntime(runtime: WorkerRuntime): Promise<Worker
   runtime.status = "starting";
   try {
     await runtime.dependencies.services.recordWorkerStarted({ workerId: runtime.options.workerId, release: runtime.options.release });
-    runtime.syncConsumer = runtime.dependencies.createSyncConsumer((job) => runtime.dependencies.services.processSync(job));
-    runtime.commandConsumer = runtime.dependencies.createCommandConsumer((job) => runtime.dependencies.services.processCommand(job));
+    runtime.syncConsumer = runtime.dependencies.createSyncConsumer(async (job) => {
+      const startedAt = runtime.options.now().getTime();
+      try { await runtime.dependencies.services.processSync(job); runtime.dependencies.metrics?.counter("worker_jobs_total", 1, { queue: "sync", result: "success" }); }
+      catch (error) { runtime.dependencies.metrics?.counter("worker_jobs_total", 1, { queue: "sync", result: "failure" }); throw error; }
+      finally { runtime.dependencies.metrics?.histogram("worker_job_duration_ms", runtime.options.now().getTime() - startedAt, { queue: "sync" }); }
+    });
+    runtime.commandConsumer = runtime.dependencies.createCommandConsumer(async (job) => {
+      const startedAt = runtime.options.now().getTime();
+      try { await runtime.dependencies.services.processCommand(job); runtime.dependencies.metrics?.counter("worker_jobs_total", 1, { queue: "commands", result: "success" }); }
+      catch (error) { runtime.dependencies.metrics?.counter("worker_jobs_total", 1, { queue: "commands", result: "failure" }); throw error; }
+      finally { runtime.dependencies.metrics?.histogram("worker_job_duration_ms", runtime.options.now().getTime() - startedAt, { queue: "commands" }); }
+    });
     runtime.startedAt = runtime.options.now();
     runtime.status = "running";
     await heartbeat(runtime);
@@ -216,5 +228,12 @@ export async function getWorkerReadiness(runtime: WorkerRuntime) {
 
 export async function getWorkerDiagnostics(runtime: WorkerRuntime) {
   const [readiness, database, queues] = await Promise.all([getWorkerReadiness(runtime), runtime.dependencies.services.getDatabaseDiagnostics(), runtime.dependencies.services.getQueueDiagnostics()]);
-  return { ...getWorkerLiveness(runtime), readiness, release: runtime.options.release, startedAt: runtime.startedAt ?? null, heartbeatLastSuccessAt: runtime.heartbeatLastSuccessAt ?? null, consumers: { sync: runtime.syncConsumer?.isRunning() ?? false, commands: runtime.commandConsumer?.isRunning() ?? false }, schedulers: runtime.schedulers, database, queues };
+  const heartbeatAgeSeconds = runtime.heartbeatLastSuccessAt ? Math.max(0, (runtime.options.now().getTime() - runtime.heartbeatLastSuccessAt.getTime()) / 1_000) : null;
+  const consumers = { sync: runtime.syncConsumer?.isRunning() ?? false, commands: runtime.commandConsumer?.isRunning() ?? false };
+  const schedulersActive = schedulerNames.every((name) => Boolean(runtime.schedulers[name].handle));
+  const queueDepth = Object.values(queues).reduce((total, queue) => total + (queue.waiting ?? 0) + (queue.active ?? 0), 0);
+  const health = aggregateHealth({ database: readiness.ready, redis: readiness.ready, consumers: consumers.sync && consumers.commands, schedulers: schedulersActive, heartbeatAgeSeconds, heartbeatStaleSeconds: runtime.options.heartbeatIntervalMs / 1_000 * 4, recoveryRequiredCount: database.recoveryRequiredCommandCount ?? 0, queueDepth });
+  runtime.dependencies.metrics?.gauge("active_workers", runtime.status === "running" ? 1 : 0); runtime.dependencies.metrics?.gauge("heartbeat_age_seconds", heartbeatAgeSeconds ?? -1);
+  runtime.dependencies.metrics?.gauge("queue_depth", queueDepth); runtime.dependencies.metrics?.gauge("recovery_required_count", database.recoveryRequiredCommandCount ?? 0); runtime.dependencies.metrics?.gauge("stale_commands", database.staleRunningCommandCount ?? 0); runtime.dependencies.metrics?.gauge("unpublished_outbox", database.unpublishedOutboxCount ?? 0);
+  return { ...getWorkerLiveness(runtime), readiness, health, release: runtime.options.release, startedAt: runtime.startedAt ?? null, heartbeatLastSuccessAt: runtime.heartbeatLastSuccessAt ?? null, consumers, schedulers: runtime.schedulers, database, queues };
 }

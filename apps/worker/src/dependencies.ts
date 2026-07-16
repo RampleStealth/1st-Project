@@ -9,6 +9,7 @@ export type ProductionWorkerFactories = {
   closeQueues: () => Promise<void>;
   closeDatabasePool: () => Promise<void>;
   logger: WorkerRuntimeDependencies["logger"];
+  metrics: NonNullable<WorkerRuntimeDependencies["metrics"]>;
   isGmailProviderError: (error: unknown) => boolean;
   sanitizeGmailProviderError: (error: unknown, context: { operation: string; jobId?: string; mailboxId?: string }) => Record<string, unknown>;
   isMailboxLeaseUnavailable: (error: unknown) => boolean;
@@ -17,8 +18,8 @@ export type ProductionWorkerFactories = {
 export type ProductionWorkerFactoryLoader = () => Promise<ProductionWorkerFactories>;
 
 async function loadProductionWorkerFactories(): Promise<ProductionWorkerFactories> {
-  const [{ Redis }, { Worker }, { createWorkerServices, closeQueues, logger, pool, MailboxLeaseUnavailable }, { isGmailProviderError, sanitizeGmailProviderError }] = await Promise.all([
-    import("ioredis"), import("bullmq"), import("./worker-services.js"), import("@aio/gmail")
+  const [{ Redis }, { Worker }, { createWorkerServices, closeQueues, logger, pool, MailboxLeaseUnavailable }, { isGmailProviderError, sanitizeGmailProviderError }, { metrics }] = await Promise.all([
+    import("ioredis"), import("bullmq"), import("./worker-services.js"), import("@aio/gmail"), import("@aio/observability")
   ]);
   return {
     createRedis: (url) => new Redis(url),
@@ -36,7 +37,7 @@ async function loadProductionWorkerFactories(): Promise<ProductionWorkerFactorie
       return { pause: (doNotWaitActive) => worker.pause(doNotWaitActive), close: (force) => worker.close(force), isRunning: () => worker.isRunning() };
     },
     createWorkerServices, closeQueues, closeDatabasePool: () => pool.end(), logger,
-    isGmailProviderError, sanitizeGmailProviderError, isMailboxLeaseUnavailable: (error) => error instanceof MailboxLeaseUnavailable
+    isGmailProviderError, sanitizeGmailProviderError, isMailboxLeaseUnavailable: (error) => error instanceof MailboxLeaseUnavailable, metrics: metrics()
   };
 }
 
@@ -48,7 +49,7 @@ export async function createProductionWorkerDependencies(config: AppConfig, load
     redis = factories.createRedis(config.REDIS_URL);
     const services = factories.createWorkerServices(config);
     return {
-      logger: factories.logger, services, redis,
+      logger: factories.logger, services, redis, metrics: factories.metrics,
       createSyncConsumer: (processor) => factories.createSyncConsumer(config, processor),
       createCommandConsumer: (processor) => factories.createCommandConsumer(config, processor),
       closeQueues: factories.closeQueues, closeDatabasePool: factories.closeDatabasePool, ownsDatabasePool: true

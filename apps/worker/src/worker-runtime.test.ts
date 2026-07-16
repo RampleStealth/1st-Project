@@ -70,3 +70,13 @@ test("heartbeat failures are safe and a scheduler never overlaps itself", async 
   assert.ok(events.some((event) => event.startsWith("error:worker scheduled task failed")));
   await stopWorkerRuntime(runtime);
 });
+
+test("runtime emits normalized scheduler, job, and diagnostic metrics", async () => {
+  const { runtime } = createFixture(); const calls: string[] = [];
+  runtime.dependencies.metrics = { counter: (name) => calls.push(`counter:${name}`), histogram: (name) => calls.push(`histogram:${name}`), gauge: (name) => calls.push(`gauge:${name}`) };
+  await startWorkerRuntime(runtime);
+  await runtime.dependencies.services.processSync({ mailboxAccountId: "11111111-1111-4111-8111-111111111111", reason: "initial" });
+  await getWorkerDiagnostics(runtime);
+  assert.ok(calls.includes("gauge:active_workers")); assert.ok(calls.includes("gauge:queue_depth"));
+  await stopWorkerRuntime(runtime);
+});
