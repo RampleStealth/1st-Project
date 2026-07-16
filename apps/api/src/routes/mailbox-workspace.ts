@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import type { AppConfig } from "@aio/config";
-import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
+import type { MailboxAccount } from "@aio/database";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
 import { classifyGmailError, getThreadFull, gmailForMailbox, hydrateThreadMetadata, isGmailProviderError, listThreads, normalizeThreadDisplay, SanitizedThreadCache, sanitizeGmailProviderError } from "@aio/gmail";
 import { CursorError, decodeThreadCursor, encodeThreadCursor, threadListQuerySchema } from "../mailbox-list.js";
@@ -14,11 +14,12 @@ type Deps = {
   pool: Pool;
   withTransaction: <T>(fn: (client: any) => Promise<T>) => Promise<T>;
   sanitizedThreadCache: SanitizedThreadCache;
+  findMailboxForUser: (mailboxAccountId: string, userId: string) => Promise<MailboxAccount | null>;
 };
 
 export function registerMailboxWorkspaceRoutes(
   app: FastifyInstance<any, any, any, any>,
-  { config, pool, withTransaction, sanitizedThreadCache }: Deps
+  { config, pool, withTransaction, sanitizedThreadCache, findMailboxForUser }: Deps
 ) {
   app.get("/v1/mailboxes",async(request,reply)=>{const user=await authenticatedUser(request,pool);if(!user)return reply.code(401).send({code:"unauthenticated",message:"Sign in to manage your connection."});const result=await pool.query("SELECT m.id,m.email_address,m.status,m.last_synced_at,m.last_sync_error,m.watch_expires_at,m.created_at,COALESCE(p.write_capability,'read_only') AS write_capability FROM mailbox_accounts m LEFT JOIN mailbox_permission_state p ON p.mailbox_account_id=m.id WHERE m.user_id=$1 AND m.status <> 'disconnected' ORDER BY m.created_at DESC",[user.id]);return result.rows;});
 

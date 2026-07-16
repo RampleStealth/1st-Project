@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { Redis } from "ioredis";
 import type { Pool } from "pg";
 import type { AppConfig } from "@aio/config";
-import { findMailboxForUser } from "@aio/database/repositories/mailbox-account";
+import type { MailboxAccount } from "@aio/database";
 import { exchangeWriteUpgradeCode, isGmailProviderError, sanitizeGmailProviderError, writeUpgradeAuthorizationUrl } from "@aio/gmail";
 import { encryptSecret } from "@aio/security";
 import { challenge, correlationId, requireCsrf } from "../route-helpers/security.js";
@@ -14,11 +14,12 @@ type Deps = {
   pool: Pool;
   redis: Redis;
   withTransaction: <T>(fn: (client: any) => Promise<T>) => Promise<T>;
+  findMailboxForUser: (mailboxAccountId: string, userId: string) => Promise<MailboxAccount | null>;
 };
 
 export function registerWritePermissionRoutes(
   app: FastifyInstance<any, any, any, any>,
-  { config, pool, redis, withTransaction }: Deps
+  { config, pool, redis, withTransaction, findMailboxForUser }: Deps
 ) {
   app.post<{ Params: { mailboxId: string } }>("/v1/mailboxes/:mailboxId/permissions/write/start", async (request, reply) => {
     const user = await authenticatedUser(request, pool);

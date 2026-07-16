@@ -3,9 +3,8 @@ import type { FastifyInstance } from "fastify";
 import type { Redis } from "ioredis";
 import type { Pool, PoolClient } from "pg";
 import type { AppConfig } from "@aio/config";
-import { ensureMailboxSyncState } from "@aio/database/repositories/mailbox-sync";
+import type { SyncJob } from "@aio/contracts";
 import { authorizationUrl, exchangeCode, gmailForMailbox, isGmailProviderError, sanitizeGmailProviderError, watchMailbox } from "@aio/gmail";
-import { enqueueSync } from "@aio/jobs";
 import { encryptSecret } from "@aio/security";
 import { challenge, cookieOptions, correlationId, hash } from "../route-helpers/security.js";
 
@@ -14,11 +13,13 @@ type Deps = {
   pool: Pool;
   redis: Redis;
   withTransaction: <T>(fn: (client: PoolClient) => Promise<T>) => Promise<T>;
+  ensureMailboxSyncState: (mailboxAccountId: string) => Promise<unknown>;
+  enqueueSync: (job: SyncJob) => Promise<unknown>;
 };
 
 export function registerGoogleAuthRoutes(
   app: FastifyInstance<any, any, any, any>,
-  { config, pool, redis, withTransaction }: Deps
+  { config, pool, redis, withTransaction, ensureMailboxSyncState, enqueueSync }: Deps
 ) {
   app.post("/v1/auth/google/start", async (_request, reply) => {
     const state = randomBytes(32).toString("base64url");
