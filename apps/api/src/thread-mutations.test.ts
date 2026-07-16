@@ -9,7 +9,7 @@ import { decryptSecret } from "@aio/security";
 import { createApiApp, type ApiAppDependencies } from "./app.js";
 
 const config: AppConfig = {
-  NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379", GOOGLE_CLIENT_ID: "client-id", GOOGLE_CLIENT_SECRET: "client-secret", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback", GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test", GMAIL_INITIAL_SYNC_LIMIT: 500, SYNC_RECONCILIATION_INTERVAL_MINUTES: 30, TOKEN_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString("base64"), SESSION_SECRET: "a".repeat(32), PORT: 4000, WEB_PORT: 3000
+  NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379", GOOGLE_CLIENT_ID: "client-id", GOOGLE_CLIENT_SECRET: "client-secret", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback", GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test", GMAIL_INITIAL_SYNC_LIMIT: 500, SYNC_RECONCILIATION_INTERVAL_MINUTES: 30, TOKEN_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString("base64"), SESSION_SECRET: "a".repeat(32), TRUST_PROXY: false, API_BODY_LIMIT_BYTES: 600 * 1024, WEBHOOK_BODY_LIMIT_BYTES: 64 * 1024, PORT: 4000, WEB_PORT: 3000
 };
 
 const ownerId = "11111111-1111-4111-8111-111111111111";
@@ -88,7 +88,7 @@ async function makeApp(options: { permission?: string; threads?: Set<string>; ma
   const app = await createApiApp(dependencies);
   const signedOwnerSession = app.signCookie("owner-session");
   const signedOtherSession = app.signCookie("other-session");
-  const headers = (session = signedOwnerSession, csrf = "csrf-token", key = idempotencyKey) => ({ cookie: `aio_session=${session}; aio_csrf=${csrf}`, "x-csrf-token": csrf, "idempotency-key": key });
+  const headers = (session = signedOwnerSession, csrf = "csrf-token", key = idempotencyKey) => ({ cookie: `aio_session=${session}; aio_csrf=${csrf}`, "x-csrf-token": csrf, "idempotency-key": key, origin: config.APP_ORIGIN });
   return { app, captured, headers, signedOtherSession };
 }
 
@@ -113,7 +113,9 @@ test("thread mutation command creation encrypts only the provider thread ID and 
   const { app, captured, headers } = await makeApp();
   const archive = `/v1/mailboxes/${mailboxId}/threads/thread-a/archive`;
   const body = { labels: ["TRASH"], userId: otherUserId, mailboxId: otherMailboxId, action: "send_draft", providerThreadId: "attacker-thread", arbitrary: { body: "ignored" } };
-  const first = await app.inject({ method: "POST", url: archive, headers: { ...headers(), "content-type": "application/json" }, payload: body });
+  const rejected = await app.inject({ method: "POST", url: archive, headers: { ...headers(), "content-type": "application/json" }, payload: body });
+  assert.deepEqual(rejected.json(), { code: "unexpected_request_body" });
+  const first = await app.inject({ method: "POST", url: archive, headers: headers() });
   const replay = await app.inject({ method: "POST", url: archive, headers: headers() });
   const conflict = await app.inject({ method: "POST", url: `/v1/mailboxes/${mailboxId}/threads/thread-a/mark-unread`, headers: headers() });
   const threadConflict = await app.inject({ method: "POST", url: `/v1/mailboxes/${mailboxId}/threads/thread-b/archive`, headers: headers() });

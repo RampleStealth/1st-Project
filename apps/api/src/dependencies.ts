@@ -1,5 +1,6 @@
 import type { AppConfig } from "@aio/config";
 import type { ApiAppDependencies } from "./app.js";
+import { createRedisRateLimiter } from "./rate-limit.js";
 
 export type ProductionDependencyFactories = {
   createRedis: (url: string) => ApiAppDependencies["redis"];
@@ -105,7 +106,8 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       isIdempotencyConflictError: factories.isIdempotencyConflictError,
       isDraftRevisionConflictError: factories.isDraftRevisionConflictError,
       isDraftStateConflictError: factories.isDraftStateConflictError,
-      isActiveDraftCommandError: factories.isActiveDraftCommandError
+      isActiveDraftCommandError: factories.isActiveDraftCommandError,
+      rateLimiter: createRedisRateLimiter(redis, config.RATE_LIMIT_FAILURE_MODE ?? (config.NODE_ENV === "production" ? "fail_closed" : "fail_open"))
     };
   } catch (error) {
     if (redis) {

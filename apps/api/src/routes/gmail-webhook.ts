@@ -18,7 +18,7 @@ export function registerGmailWebhookRoutes(
   app: FastifyInstance<any, any, any, any>,
   { config, pool, pubsubVerifier, recordPendingHistory, enqueueSync }: Deps
 ) {
-  app.post("/v1/webhooks/gmail", async (request, reply) => {
+  app.post("/v1/webhooks/gmail", { bodyLimit: config.WEBHOOK_BODY_LIMIT_BYTES }, async (request, reply) => {
     const authorization = request.headers.authorization;
     if (!authorization?.startsWith("Bearer ")) return reply.code(401).send();
     try {

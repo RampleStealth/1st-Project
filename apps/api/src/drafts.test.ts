@@ -8,7 +8,7 @@ import { logger } from "@aio/observability";
 import { decryptDraftContent, decryptProviderCommandPayload } from "@aio/security";
 import { createApiApp, type ApiAppDependencies } from "./app.js";
 
-const config: AppConfig = { NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379", GOOGLE_CLIENT_ID: "client", GOOGLE_CLIENT_SECRET: "secret", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback", GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test", GMAIL_INITIAL_SYNC_LIMIT: 500, SYNC_RECONCILIATION_INTERVAL_MINUTES: 30, TOKEN_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 5).toString("base64"), SESSION_SECRET: "a".repeat(32), PORT: 4000, WEB_PORT: 3000 };
+const config: AppConfig = { NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379", GOOGLE_CLIENT_ID: "client", GOOGLE_CLIENT_SECRET: "secret", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback", GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test", GMAIL_INITIAL_SYNC_LIMIT: 500, SYNC_RECONCILIATION_INTERVAL_MINUTES: 30, TOKEN_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 5).toString("base64"), SESSION_SECRET: "a".repeat(32), TRUST_PROXY: false, API_BODY_LIMIT_BYTES: 600 * 1024, WEBHOOK_BODY_LIMIT_BYTES: 64 * 1024, PORT: 4000, WEB_PORT: 3000 };
 const ownerId = "11111111-1111-4111-8111-111111111111";
 const otherId = "22222222-2222-4222-8222-222222222222";
 const mailboxId = "33333333-3333-4333-8333-333333333333";
@@ -42,7 +42,7 @@ async function makeApp(options: { permission?: string; draft?: any; recoveryComm
     isActiveDraftCommandError: () => false
   };
   const app = await createApiApp(dependencies); const owner = app.signCookie("owner"); const other = app.signCookie("other");
-  const headers = (session = owner, csrf = "csrf", idempotencyKey = key) => ({ cookie: `aio_session=${session}; aio_csrf=${csrf}`, "x-csrf-token": csrf, "idempotency-key": idempotencyKey, "content-type": "application/json" });
+  const headers = (session = owner, csrf = "csrf", idempotencyKey = key) => ({ cookie: `aio_session=${session}; aio_csrf=${csrf}`, "x-csrf-token": csrf, "idempotency-key": idempotencyKey, "content-type": "application/json", origin: config.APP_ORIGIN });
   return { app, captured, headers, other, getDraft: () => storedDraft };
 }
 
@@ -143,8 +143,8 @@ test("confirmed ready drafts create one encrypted minimal send command and rejec
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "x-csrf-token": "wrong" } })).statusCode, 403);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "if-match": "2" } })).statusCode, 400);
   const rejectedBody = await fixture.app.inject({ method: "POST", url, headers, payload: { gmailDraftId: "attacker", labels: ["TRASH"], recipients: ["attacker@example.test"] } });
-  assert.deepEqual(rejectedBody.json(), { code: "invalid_draft_send_request" });
-  assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "content-type": "application/json" }, payload: "null" })).json(), { code: "invalid_draft_send_request" });
+  assert.deepEqual(rejectedBody.json(), { code: "unexpected_request_body" });
+  assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "content-type": "application/json" }, payload: "null" })).json(), { code: "unexpected_request_body" });
   const accepted = await fixture.app.inject({ method: "POST", url, headers });
   assert.equal(accepted.statusCode, 202);
   assert.deepEqual(Object.keys(accepted.json()).sort(), ["commandType", "draftId", "id", "revision", "status"]);
@@ -167,7 +167,7 @@ test("send verification is owner-scoped, CSRF-protected, and only queues the ori
   assert.equal((await fixture.app.inject({ method: "POST", url })).statusCode, 401);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, cookie: `aio_session=${fixture.other}; aio_csrf=csrf` } })).statusCode, 409);
   assert.equal((await fixture.app.inject({ method: "POST", url, headers: { ...headers, "x-csrf-token": "wrong" } })).statusCode, 403);
-  assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers, payload: { commandType: "send_draft" } })).json(), { code: "invalid_draft_verification_request" });
+  assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers, payload: { commandType: "send_draft" } })).json(), { code: "unexpected_request_body" });
   assert.deepEqual((await fixture.app.inject({ method: "POST", url, headers })).json(), { id: "send-command", status: "verification_pending" });
   const unavailable = await makeApp({ draft });
   const { ["content-type"]: _unavailableContentType, ...unavailableHeaders } = unavailable.headers();

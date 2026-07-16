@@ -6,7 +6,8 @@ import type { AppConfig } from "@aio/config";
 import type { SyncJob } from "@aio/contracts";
 import { authorizationUrl, exchangeCode, gmailForMailbox, isGmailProviderError, sanitizeGmailProviderError, watchMailbox } from "@aio/gmail";
 import { encryptSecret } from "@aio/security";
-import { challenge, cookieOptions, correlationId, hash } from "../route-helpers/security.js";
+import { challenge, cookieOptions, correlationId, csrfCookieOptions, hash } from "../route-helpers/security.js";
+import { revokeAllSessionsForUser } from "../route-helpers/session.js";
 
 type Deps = {
   config: AppConfig;
@@ -50,6 +51,9 @@ export function registerGoogleAuthRoutes(
            RETURNING id, encrypted_refresh_token`,
           [user.rows[0].id, email, email, encryptSecret(refreshToken, config.TOKEN_ENCRYPTION_KEY_BASE64), tokens.scope?.split(" ") ?? []]
         );
+        // OAuth authentication always receives a newly generated session identity. Revoking prior
+        // sessions for this principal avoids preserving a pre-authentication session fixation token.
+        await revokeAllSessionsForUser(client, user.rows[0].id);
         await client.query("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES($1, $2, $3)", [user.rows[0].id, hash(sessionToken), expiresAt]);
         await client.query("INSERT INTO audit_events(actor_type, actor_id, event_type, object_type, object_id, correlation_id) VALUES('user',$1,'gmail.connected','mailbox_account',$2,$3)", [user.rows[0].id, account.rows[0].id, correlationId(request)]);
         return account.rows[0];
@@ -67,7 +71,7 @@ export function registerGoogleAuthRoutes(
       }
       await enqueueSync({ mailboxAccountId: mailbox.id, reason: "initial" });
       reply.setCookie("aio_session", sessionToken, { ...cookieOptions(config), expires: expiresAt });
-      reply.setCookie("aio_csrf", randomBytes(32).toString("base64url"), { httpOnly: false, secure: config.NODE_ENV === "production", sameSite: "lax", path: "/", expires: expiresAt });
+      reply.setCookie("aio_csrf", randomBytes(32).toString("base64url"), { ...csrfCookieOptions(config), expires: expiresAt });
       return reply.redirect(`${config.APP_ORIGIN}/connect/complete${syncDelayed ? "?sync=delayed" : ""}`);
     } catch (cause) {
       if (isGmailProviderError(cause)) request.log.error(sanitizeGmailProviderError(cause, { operation: "gmail_oauth_connection", correlationId: correlationId(request) }), "gmail connection failed");
