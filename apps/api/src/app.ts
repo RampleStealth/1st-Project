@@ -22,7 +22,7 @@ import { registerDraftRoutes } from "./routes/drafts.js";
 import { registerWritePermissionRoutes } from "./routes/permissions.js";
 import { authenticatedUser } from "./route-helpers/session.js";
 import { allowAllRateLimiter, policyForRoute, type RateLimiter } from "./rate-limit.js";
-import { applySecurityHeaders, declaredContentLength, hasAllowedContentType, isBrowserMutationRequest, requiresEmptyBody, trustedOrigin } from "./security-policy.js";
+import { allowsEmptyJsonObject, applySecurityHeaders, declaredContentLength, hasAllowedContentType, isBrowserMutationRequest, requiresEmptyBody, trustedOrigin } from "./security-policy.js";
 
 export type ApiAppDependencies = {
   config: AppConfig;
@@ -82,6 +82,8 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
 
   await app.register(cookie, { secret: config.SESSION_SECRET_PREVIOUS ? [config.SESSION_SECRET, config.SESSION_SECRET_PREVIOUS] : config.SESSION_SECRET, hook: "onRequest" });
   await app.register(cors, { origin: config.APP_ORIGIN, credentials: true, methods: ["GET", "POST", "PUT", "DELETE"] });
+  // Native empty forms use this media type. It is accepted only by the explicit empty-body policy below.
+  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => done(null, body));
 
   app.addHook("onRequest", async (request, reply) => {
     const suppliedCorrelationId = request.headers["x-correlation-id"];
@@ -91,11 +93,17 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
     const route = request.routeOptions.url ?? request.url.split("?")[0];
     const bodyLimit = route === "/v1/webhooks/gmail" ? config.WEBHOOK_BODY_LIMIT_BYTES : config.API_BODY_LIMIT_BYTES;
     if (declared === -1 || (declared !== null && declared > bodyLimit)) return reply.code(413).send({ code: "request_too_large" });
+    const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+    if (requiresEmptyBody(request) && declared !== null && declared > 0 && !(contentType === "application/json" && allowsEmptyJsonObject(request))) return reply.code(400).send({ code: "unexpected_request_body" });
     if (!hasAllowedContentType(request)) return reply.code(415).send({ code: "unsupported_content_type" });
-    if (requiresEmptyBody(request) && declared !== null && declared > 0) return reply.code(400).send({ code: "unexpected_request_body" });
     if (isBrowserMutationRequest(request) && !trustedOrigin(request.headers.origin, config)) return reply.code(403).send({ code: "origin_forbidden" });
   });
   app.addHook("preHandler", async (request, reply) => {
+    if (requiresEmptyBody(request)) {
+      const body = request.body;
+      const hasUnexpectedBody = typeof body === "string" ? body.length > 0 : body !== undefined && body !== null && (typeof body !== "object" || Object.keys(body as object).length > 0);
+      if (hasUnexpectedBody) return reply.code(400).send({ code: "unexpected_request_body" });
+    }
     const policy = policyForRoute(request.method, request.routeOptions.url ?? request.url.split("?")[0]);
     if (!policy) return;
     const user = request.cookies.aio_session ? await authenticatedUser(request, pool) : null;

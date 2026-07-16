@@ -36,7 +36,21 @@ export function hasAllowedContentType(request: FastifyRequest): boolean {
   const mediaType = typeof contentType === "string" ? contentType.split(";", 1)[0].trim().toLowerCase() : "";
   const acceptsJson = route === "/v1/webhooks/gmail" || route === "/v1/mailboxes/:mailboxId/drafts" || (route === "/v1/mailboxes/:mailboxId/drafts/:draftId" && request.method === "PUT");
   if (acceptsJson) return mediaType === "application/json";
-  return !mediaType || mediaType === "application/json";
+  if (requiresEmptyBody(request)) {
+    const declared = declaredContentLength(request);
+    if (declared !== null && declared !== 0) return mediaType === "application/json" && allowsEmptyJsonObject(request);
+    if (!mediaType || mediaType === "application/json") return true;
+    return mediaType === "application/x-www-form-urlencoded" && allowsNativeEmptyFormSubmission(request);
+  }
+  return !(["POST", "PUT", "DELETE"] as string[]).includes(request.method) || mediaType === "application/json";
+}
+
+export function allowsEmptyJsonObject(request: FastifyRequest): boolean {
+  return (request.routeOptions.url ?? request.url.split("?")[0]) === "/v1/auth/google/start";
+}
+
+function allowsNativeEmptyFormSubmission(request: FastifyRequest): boolean {
+  return (request.routeOptions.url ?? request.url.split("?")[0]) === "/v1/auth/google/start";
 }
 
 export function requiresEmptyBody(request: FastifyRequest): boolean {

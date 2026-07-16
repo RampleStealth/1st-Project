@@ -50,12 +50,20 @@ test("origin, body, and content-type guards reject before OAuth state storage", 
     const response = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers }); assert.deepEqual(response.json(), { code: "origin_forbidden" });
   }
   assert.equal(calls.redisSet, 0);
+  const nativeEmptyForm = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN, "content-type": "application/x-www-form-urlencoded", "content-length": "0" } });
+  assert.equal(nativeEmptyForm.statusCode, 302); assert.equal(calls.redisSet, 1);
+  const emptyJson = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN, "content-type": "application/json" }, payload: "{}" });
+  assert.equal(emptyJson.statusCode, 302); assert.equal(calls.redisSet, 2);
+  const unexpectedJson = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN, "content-type": "application/json" }, payload: "{\"unexpected\":true}" });
+  assert.deepEqual(unexpectedJson.json(), { code: "unexpected_request_body" }); assert.equal(calls.redisSet, 2);
+  const bodyWithoutContentType = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN, "content-length": "4" }, payload: "test" });
+  assert.deepEqual(bodyWithoutContentType.json(), { code: "unexpected_request_body" }); assert.equal(calls.redisSet, 2);
   const oversized = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN, "content-length": "16385" } });
-  assert.deepEqual(oversized.json(), { code: "request_too_large" }); assert.equal(calls.redisSet, 0);
+  assert.deepEqual(oversized.json(), { code: "request_too_large" }); assert.equal(calls.redisSet, 2);
   const wrongType = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN, "content-type": "text/plain" } });
-  assert.deepEqual(wrongType.json(), { code: "unsupported_content_type" }); assert.equal(calls.redisSet, 0);
+  assert.deepEqual(wrongType.json(), { code: "unsupported_content_type" }); assert.equal(calls.redisSet, 2);
   const valid = await app.inject({ method: "POST", url: "/v1/auth/google/start", headers: { origin: config().APP_ORIGIN } });
-  assert.equal(valid.statusCode, 302); assert.equal(calls.redisSet, 1); await app.close();
+  assert.equal(valid.statusCode, 302); assert.equal(calls.redisSet, 3); await app.close();
 });
 
 test("authenticated browser mutations require exact origin before route CSRF validation", async () => {
