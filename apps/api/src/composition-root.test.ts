@@ -88,7 +88,8 @@ function makeFactories(events: string[], dependencies: ApiAppDependencies): Prod
     isIdempotencyConflictError: dependencies.isIdempotencyConflictError,
     isDraftRevisionConflictError: dependencies.isDraftRevisionConflictError,
     isDraftStateConflictError: dependencies.isDraftStateConflictError,
-    isActiveDraftCommandError: dependencies.isActiveDraftCommandError
+    isActiveDraftCommandError: dependencies.isActiveDraftCommandError,
+    verifySchemaCompatibility: async () => { events.push("schema"); return "013_performance_capacity_indexes.sql"; }
   };
 }
 
@@ -129,7 +130,8 @@ test("application factory imports without startup side effects and registers the
   const logout = await app.inject({ method: "POST", url: "/v1/auth/logout" });
   const cors = await app.inject({ method: "OPTIONS", url: "/health", headers: { origin: config.APP_ORIGIN, "access-control-request-method": "GET" } });
   const hook = await app.inject({ method: "GET", url: "/__composition-hook" });
-  assert.deepEqual(health.json(), { status: "ok" });
+  assert.equal(health.json().status, "ok");
+  assert.deepEqual(health.json().release, { version: "development", commit: null, builtAt: null, role: "api", environment: "test" });
   assert.equal(logout.statusCode, 204);
   assert.equal(cors.statusCode, 204);
   assert.match(hook.json().correlationId, /^[0-9a-f-]{36}$/i);
@@ -140,7 +142,7 @@ test("production dependencies remain import-safe, construct through injected fac
   const events: string[] = [];
   const dependencies = makeApiDependencies(events);
   const constructed = await createProductionApiDependencies(config, async () => { events.push("load"); return makeFactories(events, dependencies); });
-  assert.deepEqual(events, ["load", `redis:${config.REDIS_URL}`, "verifier", "cache"]);
+  assert.deepEqual(events, ["load", "schema", `redis:${config.REDIS_URL}`, "verifier", "cache"]);
   assert.equal(constructed.redis, dependencies.redis);
   assert.equal(constructed.pool, dependencies.pool);
   assert.equal(constructed.enqueueSync, dependencies.enqueueSync);
@@ -151,7 +153,7 @@ test("production dependencies remain import-safe, construct through injected fac
   const failing = makeFactories(failedEvents, makeApiDependencies(failedEvents));
   failing.createPubsubVerifier = () => { throw new Error("verifier failed"); };
   await assert.rejects(() => createProductionApiDependencies(config, async () => failing), /verifier failed/);
-  assert.deepEqual(failedEvents, [`redis:${config.REDIS_URL}`, "redis.close"]);
+  assert.deepEqual(failedEvents, ["schema", `redis:${config.REDIS_URL}`, "redis.close"]);
 });
 
 function makeBootstrapProcess(events: string[], handlers: Map<string, () => void>, exitThrows = false): BootstrapDependencies["process"] {

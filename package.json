@@ -10,7 +10,12 @@
     "build": "npm run build --workspaces --if-present",
     "check": "npm run lint --workspaces --if-present && npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "db:migrate": "npm run db:migrate -w @aio/database"
+    "db:migrate": "npm run db:migrate -w @aio/database",
+    "db:status": "npm run db:status -w @aio/database",
+    "db:verify": "npm run db:verify -w @aio/database",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "ops:summary": "tsx scripts/operations.ts summary",
+    "ops:replay-queue": "tsx scripts/operations.ts replay-queue"
   },
   "engines": {
     "node": ">=22.0.0"

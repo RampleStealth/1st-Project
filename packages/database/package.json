@@ -10,10 +10,13 @@
     "./repositories/mailbox-account": "./src/repositories/mailbox-account-repository.ts",
     "./repositories/provider-command": "./src/repositories/provider-command.ts",
     "./repositories/draft": "./src/repositories/draft-repository.ts",
-    "./repositories/worker-runtime": "./src/repositories/worker-runtime-repository.ts"
+    "./repositories/worker-runtime": "./src/repositories/worker-runtime-repository.ts",
+    "./migrations": "./src/migrations.ts"
   },
   "scripts": {
-    "db:migrate": "tsx src/migrate.ts"
+    "db:migrate": "tsx src/migrate.ts",
+    "db:status": "tsx src/migration-status.ts",
+    "db:verify": "tsx src/migration-verify.ts"
   },
   "dependencies": {
     "@aio/contracts": "*", "@aio/security": "*",

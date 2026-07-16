@@ -10,6 +10,7 @@ export type ProductionWorkerFactories = {
   closeDatabasePool: () => Promise<void>;
   logger: WorkerRuntimeDependencies["logger"];
   metrics: NonNullable<WorkerRuntimeDependencies["metrics"]>;
+  verifySchemaCompatibility: () => Promise<string | null>;
   isGmailProviderError: (error: unknown) => boolean;
   sanitizeGmailProviderError: (error: unknown, context: { operation: string; jobId?: string; mailboxId?: string }) => Record<string, unknown>;
   isMailboxLeaseUnavailable: (error: unknown) => boolean;
@@ -18,8 +19,8 @@ export type ProductionWorkerFactories = {
 export type ProductionWorkerFactoryLoader = () => Promise<ProductionWorkerFactories>;
 
 async function loadProductionWorkerFactories(): Promise<ProductionWorkerFactories> {
-  const [{ Redis }, { Worker }, { createWorkerServices, closeQueues, logger, pool, MailboxLeaseUnavailable }, { isGmailProviderError, sanitizeGmailProviderError }, { metrics }] = await Promise.all([
-    import("ioredis"), import("bullmq"), import("./worker-services.js"), import("@aio/gmail"), import("@aio/observability")
+  const [{ Redis }, { Worker }, { createWorkerServices, closeQueues, logger, pool, MailboxLeaseUnavailable }, { isGmailProviderError, sanitizeGmailProviderError }, { metrics }, { verifySchemaCompatibility }] = await Promise.all([
+    import("ioredis"), import("bullmq"), import("./worker-services.js"), import("@aio/gmail"), import("@aio/observability"), import("@aio/database/migrations")
   ]);
   return {
     createRedis: (url) => new Redis(url),
@@ -37,7 +38,7 @@ async function loadProductionWorkerFactories(): Promise<ProductionWorkerFactorie
       return { pause: (doNotWaitActive) => worker.pause(doNotWaitActive), close: (force) => worker.close(force), isRunning: () => worker.isRunning() };
     },
     createWorkerServices, closeQueues, closeDatabasePool: () => pool.end(), logger,
-    isGmailProviderError, sanitizeGmailProviderError, isMailboxLeaseUnavailable: (error) => error instanceof MailboxLeaseUnavailable, metrics: metrics()
+    isGmailProviderError, sanitizeGmailProviderError, isMailboxLeaseUnavailable: (error) => error instanceof MailboxLeaseUnavailable, metrics: metrics(), verifySchemaCompatibility: () => verifySchemaCompatibility(pool)
   };
 }
 
@@ -46,6 +47,7 @@ export async function createProductionWorkerDependencies(config: AppConfig, load
   const factories = await loadFactories();
   let redis: WorkerRuntimeDependencies["redis"] | undefined;
   try {
+    await factories.verifySchemaCompatibility();
     redis = factories.createRedis(config.REDIS_URL);
     const services = factories.createWorkerServices(config);
     return {

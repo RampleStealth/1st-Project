@@ -12,8 +12,9 @@ function matchesOperationalToken(actual: unknown, expected: string) {
 
 /** Public liveness is intentionally dependency-free; readiness and diagnostics are separate. */
 export function registerHealthRoutes(app: FastifyInstance<any, any, any, any>, { config, pool, redis }: Deps) {
-  app.get("/health", async () => ({ status: "ok" }));
-  app.get("/livez", async () => ({ status: "ok" }));
+  const release = { version: config.RELEASE_VERSION ?? "development", commit: config.RELEASE_COMMIT_SHA ?? null, builtAt: config.RELEASE_BUILT_AT ?? null, role: "api", environment: config.NODE_ENV };
+  app.get("/health", async () => ({ status: "ok", release }));
+  app.get("/livez", async () => ({ status: "ok", release }));
   app.get("/readyz", async (_request, reply) => {
     try { await Promise.all([pool.query("SELECT 1"), redis.ping()]); return { status: "ready" }; }
     catch { return reply.code(503).send({ status: "unavailable" }); }

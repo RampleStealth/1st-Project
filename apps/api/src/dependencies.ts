@@ -24,6 +24,7 @@ export type ProductionDependencyFactories = {
   isDraftRevisionConflictError: ApiAppDependencies["isDraftRevisionConflictError"];
   isDraftStateConflictError: ApiAppDependencies["isDraftStateConflictError"];
   isActiveDraftCommandError: ApiAppDependencies["isActiveDraftCommandError"];
+  verifySchemaCompatibility: () => Promise<string | null>;
 };
 
 export type ProductionDependencyFactoryLoader = () => Promise<ProductionDependencyFactories>;
@@ -39,7 +40,8 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     { createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findSendRecoveryCommandForUser, DraftRevisionConflictError, DraftStateConflictError, ActiveDraftCommandError },
     { SanitizedThreadCache },
     { enqueueSync, enqueueSendDraftVerification },
-    { logger }
+    { logger },
+    { verifySchemaCompatibility }
   ] = await Promise.all([
     import("ioredis"),
     import("google-auth-library"),
@@ -50,7 +52,8 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     import("@aio/database/repositories/draft"),
     import("@aio/gmail"),
     import("@aio/jobs"),
-    import("@aio/observability")
+    import("@aio/observability"),
+    import("@aio/database/migrations")
   ]);
 
   return {
@@ -74,7 +77,8 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError,
     isDraftRevisionConflictError: (error) => error instanceof DraftRevisionConflictError,
     isDraftStateConflictError: (error) => error instanceof DraftStateConflictError,
-    isActiveDraftCommandError: (error) => error instanceof ActiveDraftCommandError
+    isActiveDraftCommandError: (error) => error instanceof ActiveDraftCommandError,
+    verifySchemaCompatibility: () => verifySchemaCompatibility(pool)
   };
 }
 
@@ -83,6 +87,7 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
   const factories = await loadFactories();
   let redis: ApiAppDependencies["redis"] | undefined;
   try {
+    await factories.verifySchemaCompatibility();
     redis = factories.createRedis(config.REDIS_URL);
     return {
       config,
