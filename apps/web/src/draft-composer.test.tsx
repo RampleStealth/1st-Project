@@ -171,6 +171,71 @@ describe("draft composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
     expect(await screen.findByText("We could not save this draft. Your last confirmed version is unchanged.", {}, { timeout: 2_000 })).toBeTruthy();
   });
+  it("stops update polling at recovery-required without retrying or presenting success", async () => {
+    let statusReads = 0;
+    let updateRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/drafts/draft") && !init?.method) return { ok: true, status: 200, json: async () => readyDraft } as Response;
+      if (url.endsWith("/drafts/draft") && init?.method === "PUT") { updateRequests += 1; return { ok: true, status: 202, json: async () => ({ id: "update", draftId: "draft", status: "pending" }) } as Response; }
+      if (url.endsWith("/provider-commands/update")) { statusReads += 1; return { ok: true, status: 200, json: async () => ({ id: "update", commandType: "update_draft", status: "recovery_required", failureCode: "transient_provider_failure" }) } as Response; }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    await screen.findByRole("button", { name: "Save draft" });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    expect(await screen.findByText(/verification before this save can be confirmed/i, {}, { timeout: 2_000 })).toBeTruthy();
+    expect(screen.queryByText("Draft ready")).toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 900)); });
+    expect(statusReads).toBe(1);
+    expect(updateRequests).toBe(1);
+  });
+  it("maps definitive update permission and authorization failures to their dedicated UI", async () => {
+    const permission = vi.fn();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => readyDraft } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ id: "scope", draftId: "draft", status: "pending" }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ id: "scope", commandType: "update_draft", status: "failed", failureCode: "write_scope_required" }) } as Response);
+    const scoped = render(<DraftComposer mailboxId="mailbox" draftId="draft" onPermissionRequired={permission} />);
+    await screen.findByRole("button", { name: "Save draft" });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable Gmail actions" }, { timeout: 2_000 }));
+    expect(permission).toHaveBeenCalledOnce();
+    scoped.unmount();
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => readyDraft } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ id: "auth", draftId: "draft", status: "pending" }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ id: "auth", commandType: "update_draft", status: "failed", failureCode: "reauthorization_required" }) } as Response);
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    await screen.findByRole("button", { name: "Save draft" });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Changed again" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    expect(await screen.findByRole("button", { name: "Reconnect Gmail" }, { timeout: 2_000 })).toBeTruthy();
+  });
+  it("ignores a late command response after navigation loads another draft", async () => {
+    let resolveStatus: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/drafts/first") && !init?.method) return Promise.resolve({ ok: true, status: 200, json: async () => ({ ...readyDraft, id: "first" }) } as Response);
+      if (url.endsWith("/drafts/first") && init?.method === "PUT") return Promise.resolve({ ok: true, status: 202, json: async () => ({ id: "update-first", draftId: "first", status: "pending" }) } as Response);
+      if (url.endsWith("/provider-commands/update-first")) return new Promise<Response>((resolve) => { resolveStatus = resolve; });
+      if (url.endsWith("/drafts/second") && !init?.method) return Promise.resolve({ ok: true, status: 200, json: async () => ({ ...readyDraft, id: "second", subject: "Second" }) } as Response);
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const rendered = render(<DraftComposer mailboxId="mailbox" draftId="first" />);
+    await screen.findByRole("button", { name: "Save draft" });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await waitFor(() => expect(resolveStatus).toBeTypeOf("function"), { timeout: 2_000 });
+    rendered.rerender(<DraftComposer mailboxId="mailbox" draftId="second" />);
+    expect(await screen.findByDisplayValue("Second")).toBeTruthy();
+    await act(async () => resolveStatus?.({ ok: true, status: 200, json: async () => ({ id: "update-first", commandType: "update_draft", status: "recovery_required", failureCode: "provider_execution_uncertain" }) } as Response));
+    expect(screen.getByDisplayValue("Second")).toBeTruthy();
+    expect(screen.queryByText(/verification before this save/i)).toBeNull();
+  });
   it("disables Send for dirty browser edits", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ id: "create", draftId: "draft", status: "succeeded" }) } as Response)

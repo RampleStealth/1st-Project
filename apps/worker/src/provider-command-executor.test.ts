@@ -21,6 +21,7 @@ import {
   releaseCreateDraftRecoveryClaim,
   releaseSendDraftRecoveryClaim,
   releaseUpdateDraftRecoveryClaim,
+  retryPolicy,
   scheduleRetryFromClaim,
   StaleCommandClaimError
 } from "@aio/database/repositories/provider-command";
@@ -255,6 +256,123 @@ test("draft update preserves safety across preflight retries, post-execution unc
     await pool.query("UPDATE provider_commands SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [crashed.id]); await recoverExpiredLeases();
     assert.equal((await commandState(crashed.id)).status, "recovery_required");
     assert.deepEqual(await executeProviderCommand(crashed.id, executor()), { outcome: "not_claimed" });
+  } finally { await data.cleanup(); }
+});
+
+test("draft update retries only pre-provider failures and later confirms exactly one Gmail update", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const updated = await updateDraftCommand(data.mailboxId);
+    let preflightCalls = 0;
+    let updateCalls = 0;
+    const dependencies = executor({
+      loadDraftForUpdate,
+      getDraft: async () => {
+        preflightCalls += 1;
+        if (preflightCalls === 1) throw { response: { status: 429 } };
+        return { draftId: updated.gmailDraftId, messageId: updated.gmailMessageId, threadId: updated.gmailThreadId };
+      },
+      updateDraft: async () => {
+        updateCalls += 1;
+        return { draftId: updated.gmailDraftId, messageId: "retry-success-message", threadId: updated.gmailThreadId };
+      },
+      confirmDraftUpdate
+    });
+
+    assert.deepEqual(await executeProviderCommand(updated.id, dependencies), { outcome: "retryable" });
+    let state = await commandState(updated.id);
+    assert.equal(state.status, "retryable");
+    assert.equal(state.attempt_count, 1);
+    assert.equal(state.failure_code, "rate_limited");
+    assert.equal(updateCalls, 0);
+
+    await pool.query("UPDATE provider_commands SET next_attempt_at=now() WHERE id=$1", [updated.id]);
+    assert.deepEqual(await executeProviderCommand(updated.id, dependencies), { outcome: "succeeded" });
+    state = await commandState(updated.id);
+    assert.equal(state.status, "succeeded");
+    assert.equal(state.attempt_count, 2);
+    assert.equal(updateCalls, 1);
+    assert.deepEqual(
+      (await pool.query<{ status: string; revision: number; confirmed_revision: number; gmail_draft_id: string; gmail_draft_message_id: string }>("SELECT status,revision,confirmed_revision,gmail_draft_id,gmail_draft_message_id FROM drafts WHERE id=$1", [updated.draftId])).rows[0],
+      { status: "ready", revision: 2, confirmed_revision: 2, gmail_draft_id: updated.gmailDraftId, gmail_draft_message_id: "retry-success-message" }
+    );
+    assert.deepEqual(await executeProviderCommand(updated.id, dependencies), { outcome: "not_claimed" });
+    assert.equal(updateCalls, 1);
+  } finally { await data.cleanup(); }
+});
+
+test("draft update retry exhaustion is bounded and terminal without a Gmail mutation", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const updated = await updateDraftCommand(data.mailboxId);
+    let updateCalls = 0;
+    const dependencies = executor({
+      loadDraftForUpdate,
+      getDraft: async () => { throw { response: { status: 503 } }; },
+      updateDraft: async () => { updateCalls += 1; return { draftId: "unexpected", messageId: "unexpected", threadId: null }; }
+    });
+
+    for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
+      const result = await executeProviderCommand(updated.id, dependencies);
+      assert.deepEqual(result, { outcome: attempt === retryPolicy.maxAttempts ? "failed" : "retryable" });
+      const state = await commandState(updated.id);
+      assert.equal(state.attempt_count, attempt);
+      assert.equal(state.status, attempt === retryPolicy.maxAttempts ? "failed" : "retryable");
+      assert.equal(state.failure_code, "transient_provider_failure");
+      if (attempt < retryPolicy.maxAttempts) await pool.query("UPDATE provider_commands SET next_attempt_at=now() WHERE id=$1", [updated.id]);
+    }
+
+    assert.equal(updateCalls, 0);
+    assert.deepEqual(await executeProviderCommand(updated.id, dependencies), { outcome: "not_claimed" });
+    const projection = (await pool.query<{ status: string; revision: number; confirmed_revision: number }>("SELECT status,revision,confirmed_revision FROM drafts WHERE id=$1", [updated.draftId])).rows[0];
+    assert.deepEqual(projection, { status: "updating", revision: 2, confirmed_revision: 1 });
+  } finally { await data.cleanup(); }
+});
+
+test("draft update definitive rejections fail while post-provider completion failure requires recovery", { skip: !available }, async () => {
+  const data = await fixture();
+  try {
+    const failures: Array<{ status: number; responseData?: unknown; code: string }> = [
+      { status: 403, responseData: { error: { message: "Request had insufficient authentication scopes.", errors: [{ reason: "insufficientPermissions" }] } }, code: "write_scope_required" },
+      { status: 401, code: "reauthorization_required" },
+      { status: 400, code: "provider_rejected" }
+    ];
+    for (const failure of failures) {
+      const updated = await updateDraftCommand(data.mailboxId);
+      let updateCalls = 0;
+      assert.deepEqual(await executeProviderCommand(updated.id, executor({
+        loadDraftForUpdate,
+        getDraft: async () => { throw { response: { status: failure.status, data: failure.responseData ?? {} } }; },
+        updateDraft: async () => { updateCalls += 1; return { draftId: "unexpected", messageId: "unexpected", threadId: null }; }
+      })), { outcome: "failed" });
+      const state = await commandState(updated.id);
+      assert.equal(state.status, "failed");
+      assert.equal(state.failure_code, failure.code);
+      assert.equal(updateCalls, 0);
+      assert.deepEqual(await executeProviderCommand(updated.id, executor()), { outcome: "not_claimed" });
+    }
+
+    const uncertain = await updateDraftCommand(data.mailboxId);
+    let updateCalls = 0;
+    assert.deepEqual(await executeProviderCommand(uncertain.id, executor({
+      loadDraftForUpdate,
+      getDraft: async () => ({ draftId: uncertain.gmailDraftId, messageId: uncertain.gmailMessageId, threadId: uncertain.gmailThreadId }),
+      updateDraft: async () => { updateCalls += 1; return { draftId: uncertain.gmailDraftId, messageId: "provider-confirmed-message", threadId: uncertain.gmailThreadId }; },
+      confirmDraftUpdate,
+      completeConfirmedMutation: async (client, commandId, claimId, projection, providerResult) =>
+        completeConfirmedMutation(client, commandId, claimId, async () => { await projection(); throw new Error("projection completion failed"); }, providerResult)
+    })), { outcome: "recovery_required" });
+    assert.equal(updateCalls, 1);
+    const state = await commandState(uncertain.id);
+    assert.equal(state.status, "recovery_required");
+    assert.equal(state.failure_code, "unknown_provider_failure");
+    assert.equal(state.provider_result_reference, null);
+    assert.deepEqual(
+      (await pool.query<{ status: string; revision: number; confirmed_revision: number; gmail_draft_message_id: string }>("SELECT status,revision,confirmed_revision,gmail_draft_message_id FROM drafts WHERE id=$1", [uncertain.draftId])).rows[0],
+      { status: "updating", revision: 2, confirmed_revision: 1, gmail_draft_message_id: uncertain.gmailMessageId }
+    );
+    assert.deepEqual(await executeProviderCommand(uncertain.id, executor()), { outcome: "not_claimed" });
+    assert.equal(updateCalls, 1);
   } finally { await data.cleanup(); }
 });
 
