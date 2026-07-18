@@ -6,6 +6,7 @@ import { readerIframePolicy, sandboxedDocument } from "./safe-iframe.js";
 type Message = { id: string; from: string | null; to: string[]; subject: string | null; sentAt: string | null; attachments: Array<{ filename: string; mimeType: string; size: number | null }>; plainText: string; sanitizedHtml: string | null; renderingState: "ready" | "fallback" | "failed" };
 type Thread = { id: string; messages: Message[] };
 type DraftEditEligibility = { editable: boolean; draftId?: string; writeGranted?: boolean };
+type Owned<T> = { owner: string; value: T };
 type CommandAction = "archive" | "mark-unread";
 type Command = { id: string; generation: number; status: string; action: CommandAction; threadId: string };
 type CommandLifecycle = {
@@ -50,13 +51,20 @@ function dateTime(value: string | null) {
 }
 
 export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, onClose, onEditDraft, onPermissionRequired }: { mailboxId: string; threadId?: string; view?: string; onArchived?: () => void; onUnread?: () => void; onClose?: () => void; onEditDraft?: (draftId: string) => void; onPermissionRequired?: () => void }) {
-  const [state, setState] = useState<ReaderState>(threadId ? "loading" : "idle");
-  const [thread, setThread] = useState<Thread | null>(null);
+  const readerIdentity = `${mailboxId}:${view ?? "unknown"}:${threadId ?? "none"}`;
+  const readerIdentityRef = useRef(readerIdentity); readerIdentityRef.current = readerIdentity;
+  const readGeneration = useRef(0);
+  const eligibilityGeneration = useRef(0);
+  const [ownedState, setOwnedState] = useState<Owned<ReaderState>>({ owner: readerIdentity, value: threadId ? "loading" : "idle" });
+  const [ownedThread, setOwnedThread] = useState<Owned<Thread | null>>({ owner: readerIdentity, value: null });
   const [attempt, setAttempt] = useState(0);
   const [command, setCommand] = useState<Command | null>(null);
-  const [draftEdit, setDraftEdit] = useState<DraftEditEligibility | null>(null);
+  const [ownedDraftEdit, setOwnedDraftEdit] = useState<Owned<DraftEditEligibility | null>>({ owner: readerIdentity, value: null });
   const lifecycleGeneration = useRef(0);
   const activeLifecycle = useRef<CommandLifecycle | null>(null);
+  const state = ownedState.owner === readerIdentity ? ownedState.value : threadId ? "loading" : "idle";
+  const thread = ownedThread.owner === readerIdentity ? ownedThread.value : null;
+  const draftEdit = ownedDraftEdit.owner === readerIdentity ? ownedDraftEdit.value : null;
   const subject = useMemo(() => decodeDisplayEntities(thread?.messages[0]?.subject) || "(No subject)", [thread]);
   useEffect(() => () => {
     const lifecycle = activeLifecycle.current;
@@ -126,7 +134,7 @@ export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, 
     if (command.status === "succeeded") setCommand((current) => current?.generation === lifecycle.generation ? null : current);
   }, [command, onArchived, onUnread, threadId, view]);
   const mutate = async (action: CommandAction) => {
-    if (!threadId || command || activeLifecycle.current) return;
+    if (!threadId || view === "drafts" || command || activeLifecycle.current) return;
     const lifecycle: CommandLifecycle = { generation: ++lifecycleGeneration.current, commandId: null, threadId, action, controller: new AbortController(), timer: null, polling: false, status: "pending", terminalApplied: false, confirmedEventEmitted: false, disposed: false };
     activeLifecycle.current = lifecycle;
     setCommand({ id: "", generation: lifecycle.generation, status: "pending", action, threadId });
@@ -160,33 +168,43 @@ export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, 
     }
   };
   useEffect(() => {
-    if (!threadId) { setState("idle"); setThread(null); return; }
-    let active = true; setState("loading"); setThread(null);
-    void fetch(`/v1/mailboxes/${mailboxId}/threads/${encodeURIComponent(threadId)}`, { credentials: "include" }).then(async (response) => {
-      if (!active) return;
-      if (response.ok) { setThread(await response.json() as Thread); setState("ready"); return; }
-      const body = await response.json().catch(() => null) as { code?: string } | null;
-      setState(readerFailureState(body?.code));
-    }).catch(() => active && setState("error"));
-    return () => { active = false; };
-  }, [attempt, mailboxId, threadId]);
-  useEffect(() => {
-    if (view !== "drafts" || !threadId) { setDraftEdit(null); return; }
+    const requestOwner = readerIdentity;
+    const generation = ++readGeneration.current;
     const controller = new AbortController();
-    setDraftEdit(null);
+    const ownsRequest = () => !controller.signal.aborted && readerIdentityRef.current === requestOwner && readGeneration.current === generation;
+    if (!threadId) { setOwnedState({ owner: requestOwner, value: "idle" }); setOwnedThread({ owner: requestOwner, value: null }); return () => controller.abort(); }
+    setOwnedState({ owner: requestOwner, value: "loading" }); setOwnedThread({ owner: requestOwner, value: null });
+    void fetch(`/v1/mailboxes/${mailboxId}/threads/${encodeURIComponent(threadId)}`, { credentials: "include", signal: controller.signal }).then(async (response) => {
+      if (response.ok) {
+        const value = await response.json() as Thread;
+        if (ownsRequest()) { setOwnedThread({ owner: requestOwner, value }); setOwnedState({ owner: requestOwner, value: "ready" }); }
+        return;
+      }
+      const body = await response.json().catch(() => null) as { code?: string } | null;
+      if (ownsRequest()) setOwnedState({ owner: requestOwner, value: readerFailureState(body?.code) });
+    }).catch((error) => { if (ownsRequest() && !(error instanceof DOMException && error.name === "AbortError")) setOwnedState({ owner: requestOwner, value: "error" }); });
+    return () => { controller.abort(); readGeneration.current += 1; };
+  }, [attempt, mailboxId, readerIdentity, threadId]);
+  useEffect(() => {
+    const requestOwner = readerIdentity;
+    const generation = ++eligibilityGeneration.current;
+    if (view !== "drafts" || !threadId) { setOwnedDraftEdit({ owner: requestOwner, value: null }); return; }
+    const controller = new AbortController();
+    const ownsRequest = () => !controller.signal.aborted && readerIdentityRef.current === requestOwner && eligibilityGeneration.current === generation;
+    setOwnedDraftEdit({ owner: requestOwner, value: null });
     void fetch(`/v1/mailboxes/${mailboxId}/threads/${encodeURIComponent(threadId)}/draft-edit-eligibility`, { credentials: "include", signal: controller.signal })
       .then(async (response) => response.ok ? response.json() as Promise<DraftEditEligibility> : null)
-      .then((value) => { if (!controller.signal.aborted) setDraftEdit(value); })
-      .catch((error) => { if (!(error instanceof DOMException && error.name === "AbortError")) setDraftEdit(null); });
-    return () => controller.abort();
-  }, [mailboxId, threadId, view]);
+      .then((value) => { if (ownsRequest()) setOwnedDraftEdit({ owner: requestOwner, value }); })
+      .catch((error) => { if (ownsRequest() && !(error instanceof DOMException && error.name === "AbortError")) setOwnedDraftEdit({ owner: requestOwner, value: null }); });
+    return () => { controller.abort(); eligibilityGeneration.current += 1; };
+  }, [mailboxId, readerIdentity, threadId, view]);
   if (state === "idle") return <div className="reader-empty"><span aria-hidden="true">◌</span><h2>Select a conversation</h2><p>Choose a thread from the list to read it.</p></div>;
   if (state === "loading") return <section className="reader-state" aria-live="polite"><div className="reader-skeleton" /><div className="reader-skeleton" /><span>Loading conversation…</span></section>;
   if (state === "deleted") return <section className="reader-state"><h2>This conversation is no longer available</h2><p>It may have been deleted in Gmail.</p></section>;
   if (state === "disconnected") return <section className="reader-state"><h2>Reconnect Gmail to read this conversation</h2><p>Your connection needs attention before we can load it.</p></section>;
   if (state === "rendering-failure") return <section className="reader-state"><h2>We could not render this conversation safely</h2><p>No unfiltered content was shown.</p><button className="button" type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></section>;
   if (state === "error" || !thread) return <section className="reader-state"><h2>We could not load this conversation</h2><p>Gmail may be temporarily unavailable.</p><button className="button" type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></section>;
-  return <section className="thread-reader" aria-labelledby="reader-subject"><header className="reader-header"><div><p className="reader-eyebrow">Conversation</p><h1 id="reader-subject">{subject}</h1></div><div className="reader-toolbar" aria-label="Conversation actions"><button className="button button--secondary reader-close" type="button" onClick={onClose}>Back to list</button>{draftEdit?.editable && (draftEdit.writeGranted ? <button className="button button--secondary" type="button" onClick={() => draftEdit.draftId && onEditDraft?.(draftEdit.draftId)}>Edit draft</button> : <button className="button button--secondary" type="button" onClick={onPermissionRequired}>Enable editing</button>)}<button className="button button--secondary" disabled={Boolean(command)} onClick={() => void mutate("archive")} type="button">Archive</button><button className="button button--secondary" disabled={Boolean(command)} onClick={() => void mutate("mark-unread")} type="button">Mark unread</button></div></header>{command && <p className={`command-notice command-notice--${command.status}`} role="status">{commandMessage(command.status)}</p>}<div className="thread-reader__messages">{thread.messages.map((message, index) => {
+  return <section className="thread-reader" aria-labelledby="reader-subject"><header className="reader-header"><div><p className="reader-eyebrow">Conversation</p><h1 id="reader-subject">{subject}</h1></div><div className="reader-toolbar" aria-label="Conversation actions"><button className="button button--secondary reader-close" type="button" onClick={onClose}>Back to list</button>{draftEdit?.editable && (draftEdit.writeGranted ? <button className="button button--secondary" type="button" onClick={() => draftEdit.draftId && onEditDraft?.(draftEdit.draftId)}>Edit draft</button> : <button className="button button--secondary" type="button" onClick={onPermissionRequired}>Enable editing</button>)}{view !== "drafts" && <><button className="button button--secondary" disabled={Boolean(command)} onClick={() => void mutate("archive")} type="button">Archive</button><button className="button button--secondary" disabled={Boolean(command)} onClick={() => void mutate("mark-unread")} type="button">Mark unread</button></>}</div></header>{command && <p className={`command-notice command-notice--${command.status}`} role="status">{commandMessage(command.status)}</p>}<div className="thread-reader__messages">{thread.messages.map((message, index) => {
     const sender = decodeDisplayEntities(message.from) || "Unknown sender";
     const recipients = message.to.map((recipient) => decodeDisplayEntities(recipient)).join(", ");
     return <article className="message" key={message.id} aria-labelledby={`message-${message.id}-sender`}><header><div><strong id={`message-${message.id}-sender`}>{sender}</strong><p>{recipients ? `To: ${recipients}` : ""}</p></div><time dateTime={message.sentAt ?? undefined}>{dateTime(message.sentAt)}</time></header>{index > 0 && <p className="message-subject">{decodeDisplayEntities(message.subject) || "(No subject)"}</p>}{message.attachments.length > 0 && <p className="attachment-note">{message.attachments.length} attachment{message.attachments.length === 1 ? "" : "s"} — downloads are unavailable</p>}{message.renderingState === "failed" && <p className="render-warning">Displayed as safe plain text because rich content could not be rendered.</p>}{message.sanitizedHtml ? <iframe title={`Sanitized message from ${sender}`} className="message-html" {...readerIframePolicy} srcDoc={sandboxedDocument(message.sanitizedHtml)} /> : <pre className="message-plain">{message.plainText}</pre>}</article>;

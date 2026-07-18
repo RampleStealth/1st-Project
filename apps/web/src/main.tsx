@@ -45,9 +45,10 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
 }
 
 export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
-  const { view = "inbox", threadId, draftId } = useParams();
+  const { mailboxId: routeMailboxId, view = "inbox", threadId, draftId } = useParams();
   const navigate = useNavigate();
   const selectedView = draftId ? "drafts" : views.some(([key]) => key === view) ? view : "inbox";
+  const workspaceIdentity = `${mailbox.id}:${selectedView}`;
   const lastSelectedThreadId = useRef<string | null>(null);
   useEffect(() => { if (threadId) lastSelectedThreadId.current = threadId; }, [threadId]);
   const closeReader = useCallback((afterArchive = false) => {
@@ -65,7 +66,8 @@ export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
     window.addEventListener("keydown", onKeyDown); return () => window.removeEventListener("keydown", onKeyDown);
   }, [closeReader, draftId, mailbox.id, selectedView, threadId]);
   const requestWritePermission = () => window.dispatchEvent(new Event("aio:request-write-permission"));
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
+  if (routeMailboxId !== mailbox.id) return <Navigate to={`/mail/${mailbox.id}/inbox`} replace />;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column"><ThreadList key={workspaceIdentity} mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer key={`${workspaceIdentity}:local:${draftId}`} mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : selectedView === "drafts" && !threadId ? <DraftComposer key={`${workspaceIdentity}:new`} mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader key={`${workspaceIdentity}:thread:${threadId ?? "none"}`} mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
 }
 
 function App() {

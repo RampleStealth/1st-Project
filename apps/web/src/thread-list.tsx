@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { decodeDisplayEntities } from "./display-text.js";
 
 type ThreadItem = { id: string; providerThreadId: string; subject: string | null; latestSender: string | null; preview: string | null; lastMessageAt: string | null; unreadCount: number; messageCount: number; hasAttachments: boolean | null; hasDraft: boolean; labels: string[]; };
 type Page = { items: ThreadItem[]; nextCursor: string | null; source: "gmail"; fetchedAt: string };
+type Owned<T> = { owner: string; value: T };
 
 function formatDate(value: string | null) {
   return value ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value)) : "";
@@ -25,40 +26,61 @@ function ThreadRow({ thread, selected, onSelect }: { thread: ThreadItem; selecte
 
 export function ThreadList({ mailboxId, view, selectedThreadId }: { mailboxId: string; view: string; selectedThreadId?: string }) {
   const navigate = useNavigate();
-  const [page, setPage] = useState<Page | null>(null);
+  const owner = `${mailboxId}:${view}`;
+  const ownerRef = useRef(owner); ownerRef.current = owner;
+  const requestGeneration = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
+  const [ownedPage, setOwnedPage] = useState<Owned<Page> | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [ownedLoading, setOwnedLoading] = useState<Owned<boolean>>({ owner, value: true });
+  const [ownedError, setOwnedError] = useState<Owned<string | null>>({ owner, value: null });
+  const page = ownedPage?.owner === owner ? ownedPage.value : null;
+  const loading = ownedLoading.owner === owner ? ownedLoading.value : true;
+  const error = ownedError.owner === owner ? ownedError.value : null;
   const load = async (requestedCursor: string | null) => {
-    setLoading(true); setError(null);
+    const requestOwner = owner;
+    const generation = ++requestGeneration.current;
+    activeRequest.current?.abort();
+    const controller = new AbortController(); activeRequest.current = controller;
+    const ownsRequest = () => !controller.signal.aborted && ownerRef.current === requestOwner && requestGeneration.current === generation;
+    setOwnedLoading({ owner: requestOwner, value: true }); setOwnedError({ owner: requestOwner, value: null });
     try {
       const params = new URLSearchParams({ view, limit: "25" });
       if (requestedCursor) params.set("cursor", requestedCursor);
-      const response = await fetch(`/v1/mailboxes/${mailboxId}/threads?${params}`, { credentials: "include" });
+      const response = await fetch(`/v1/mailboxes/${mailboxId}/threads?${params}`, { credentials: "include", signal: controller.signal });
       if (!response.ok) {
         const problem = await response.json().catch(() => null) as { message?: string } | null;
         throw new Error(problem?.message ?? "We could not load this Gmail view.");
       }
-      setPage(await response.json() as Page);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "We could not load this Gmail view."); }
-    finally { setLoading(false); }
+      const nextPage = await response.json() as Page;
+      if (ownsRequest()) setOwnedPage({ owner: requestOwner, value: nextPage });
+    } catch (cause) {
+      if (ownsRequest()) setOwnedError({ owner: requestOwner, value: cause instanceof Error ? cause.message : "We could not load this Gmail view." });
+    } finally {
+      if (ownsRequest()) { setOwnedLoading({ owner: requestOwner, value: false }); activeRequest.current = null; }
+    }
   };
-  useEffect(() => { setCursor(null); setHistory([]); setPage(null); void load(null); }, [mailboxId, view]);
+  useEffect(() => {
+    activeRequest.current?.abort(); requestGeneration.current += 1;
+    setCursor(null); setHistory([]); setOwnedPage(null); setOwnedError({ owner, value: null }); setOwnedLoading({ owner, value: true });
+    void load(null);
+    return () => { activeRequest.current?.abort(); requestGeneration.current += 1; };
+  }, [mailboxId, view]);
   useEffect(() => {
     const confirmed = (event: Event) => {
       const detail = (event as CustomEvent<{ threadId: string; action: "archive" | "mark-unread" }>).detail;
       if (!detail) return;
-      setPage((current) => {
-        if (!current) return current;
-        if (detail.action === "archive" && view === "inbox") return { ...current, items: current.items.filter((item) => item.providerThreadId !== detail.threadId) };
-        if (detail.action === "mark-unread") return { ...current, items: current.items.map((item) => item.providerThreadId === detail.threadId ? { ...item, unreadCount: Math.max(1, item.unreadCount), labels: [...new Set([...item.labels, "UNREAD"])] } : item) };
+      setOwnedPage((current) => {
+        if (!current || current.owner !== owner) return current;
+        if (detail.action === "archive" && view === "inbox") return { ...current, value: { ...current.value, items: current.value.items.filter((item) => item.providerThreadId !== detail.threadId) } };
+        if (detail.action === "mark-unread") return { ...current, value: { ...current.value, items: current.value.items.map((item) => item.providerThreadId === detail.threadId ? { ...item, unreadCount: Math.max(1, item.unreadCount), labels: [...new Set([...item.labels, "UNREAD"])] } : item) } };
         return current;
       });
     };
     window.addEventListener("aio:thread-command-confirmed", confirmed);
     return () => window.removeEventListener("aio:thread-command-confirmed", confirmed);
-  }, [view]);
+  }, [owner, view]);
   const next = () => { if (!page?.nextCursor) return; setHistory((previous) => [...previous, cursor]); setCursor(page.nextCursor); void load(page.nextCursor); };
   const previous = () => { if (!history.length) return; const prior = history.at(-1) ?? null; setHistory((items) => items.slice(0, -1)); setCursor(prior); void load(prior); };
   if (loading && !page) return <section className="thread-list-state" aria-live="polite"><div className="thread-skeleton" /><div className="thread-skeleton" /><div className="thread-skeleton" /><span>Loading Gmail threads…</span></section>;
