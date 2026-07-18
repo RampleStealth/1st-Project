@@ -5,11 +5,34 @@ import { readerIframePolicy, sandboxedDocument } from "./safe-iframe.js";
 
 type Message = { id: string; from: string | null; to: string[]; subject: string | null; sentAt: string | null; attachments: Array<{ filename: string; mimeType: string; size: number | null }>; plainText: string; sanitizedHtml: string | null; renderingState: "ready" | "fallback" | "failed" };
 type Thread = { id: string; messages: Message[] };
-type Command = { id: string; status: string; action: "archive" | "mark-unread"; threadId: string };
+type CommandAction = "archive" | "mark-unread";
+type Command = { id: string; generation: number; status: string; action: CommandAction; threadId: string };
+type CommandLifecycle = {
+  generation: number;
+  commandId: string | null;
+  threadId: string;
+  action: CommandAction;
+  controller: AbortController;
+  timer: ReturnType<typeof setTimeout> | null;
+  polling: boolean;
+  status: string;
+  terminalApplied: boolean;
+  confirmedEventEmitted: boolean;
+  disposed: boolean;
+};
 const terminalCommandStatuses = new Set(["succeeded", "failed", "recovery_required", "permission_required", "reauthorization_required"]);
 
 export function mergePolledCommandStatus(command: Command, status: string): Command {
   return terminalCommandStatuses.has(command.status) || command.status === status || (status === "pending" && command.status !== "pending") ? command : { ...command, status };
+}
+
+function disposeCommandLifecycle(lifecycle: CommandLifecycle) {
+  if (lifecycle.disposed) return;
+  lifecycle.disposed = true;
+  if (lifecycle.timer) clearTimeout(lifecycle.timer);
+  lifecycle.timer = null;
+  lifecycle.polling = false;
+  lifecycle.controller.abort();
 }
 
 function commandMessage(status: string) {
@@ -30,36 +53,109 @@ export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, 
   const [thread, setThread] = useState<Thread | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [command, setCommand] = useState<Command | null>(null);
-  const emittedConfirmationId = useRef<string | null>(null);
+  const lifecycleGeneration = useRef(0);
+  const activeLifecycle = useRef<CommandLifecycle | null>(null);
   const subject = useMemo(() => decodeDisplayEntities(thread?.messages[0]?.subject) || "(No subject)", [thread]);
-  useEffect(() => { setCommand((current) => current?.threadId === threadId ? current : null); }, [threadId]);
+  useEffect(() => () => {
+    const lifecycle = activeLifecycle.current;
+    if (lifecycle) disposeCommandLifecycle(lifecycle);
+    activeLifecycle.current = null;
+  }, []);
   useEffect(() => {
-    if (!command || command.threadId !== threadId || terminalCommandStatuses.has(command.status)) return;
-    let active = true;
-    const current = command;
-    const timer = setTimeout(() => void fetch(`/v1/mailboxes/${mailboxId}/provider-commands/${current.id}`, { credentials: "include" })
-      .then((response) => response.ok ? response.json() : null)
-      .then((value) => {
-        if (!active || !value || value.id !== current.id || typeof value.status !== "string") return;
-        setCommand((existing) => !existing || existing.id !== current.id || existing.threadId !== current.threadId ? existing : mergePolledCommandStatus(existing, value.status));
-      }), 1000);
-    return () => { active = false; clearTimeout(timer); };
-  }, [command, mailboxId, threadId]);
+    const lifecycle = activeLifecycle.current;
+    if (lifecycle && lifecycle.threadId !== threadId) {
+      disposeCommandLifecycle(lifecycle);
+      activeLifecycle.current = null;
+    }
+    setCommand((current) => current?.threadId === threadId ? current : null);
+  }, [threadId]);
   useEffect(() => {
-    if (command?.status !== "succeeded" || emittedConfirmationId.current === command.id) return;
-    emittedConfirmationId.current = command.id;
-    window.dispatchEvent(new CustomEvent("aio:thread-command-confirmed", { detail: { threadId: command.threadId, action: command.action } }));
-    if (command.action === "archive" && view === "inbox" && threadId === command.threadId) onArchived?.();
-    if (command.action === "mark-unread" && threadId === command.threadId) onUnread?.();
-    setCommand((current) => current?.id === command.id ? null : current);
+    const lifecycle = activeLifecycle.current;
+    if (!command || !lifecycle || lifecycle.disposed || lifecycle.commandId !== command.id || lifecycle.generation !== command.generation || lifecycle.threadId !== threadId || terminalCommandStatuses.has(lifecycle.status)) return;
+    const isCurrent = () => activeLifecycle.current === lifecycle && !lifecycle.disposed && lifecycle.threadId === threadId;
+    const schedule = () => {
+      if (!isCurrent() || terminalCommandStatuses.has(lifecycle.status)) return;
+      lifecycle.timer = setTimeout(() => void poll(), 1_000);
+    };
+    const poll = async () => {
+      lifecycle.timer = null;
+      if (!isCurrent() || !lifecycle.commandId) return;
+      lifecycle.polling = true;
+      try {
+        const response = await fetch(`/v1/mailboxes/${mailboxId}/provider-commands/${lifecycle.commandId}`, { credentials: "include", signal: lifecycle.controller.signal });
+        const value = response.ok ? await response.json() : null;
+        if (!isCurrent() || !value || value.id !== lifecycle.commandId || typeof value.status !== "string") return;
+        setCommand((existing) => {
+          if (!existing || existing.generation !== lifecycle.generation || existing.id !== lifecycle.commandId || existing.threadId !== lifecycle.threadId) return existing;
+          const next = mergePolledCommandStatus(existing, value.status);
+          lifecycle.status = next.status;
+          return next;
+        });
+        if (!terminalCommandStatuses.has(value.status)) schedule();
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+      } finally {
+        lifecycle.polling = false;
+      }
+    };
+    schedule();
+    return () => {
+      if (lifecycle.timer) clearTimeout(lifecycle.timer);
+      lifecycle.timer = null;
+      if (activeLifecycle.current === lifecycle && lifecycle.threadId !== threadId) {
+        disposeCommandLifecycle(lifecycle);
+        activeLifecycle.current = null;
+      }
+    };
+  }, [command?.generation, command?.id, mailboxId, threadId]);
+  useEffect(() => {
+    if (!command || !terminalCommandStatuses.has(command.status)) return;
+    const lifecycle = activeLifecycle.current;
+    if (!lifecycle || lifecycle.generation !== command.generation || lifecycle.commandId !== command.id || lifecycle.terminalApplied) return;
+    lifecycle.terminalApplied = true;
+    if (command.status === "succeeded" && !lifecycle.confirmedEventEmitted) {
+      lifecycle.confirmedEventEmitted = true;
+      window.dispatchEvent(new CustomEvent("aio:thread-command-confirmed", { detail: { threadId: lifecycle.threadId, action: lifecycle.action } }));
+      if (lifecycle.action === "archive" && view === "inbox" && threadId === lifecycle.threadId) onArchived?.();
+      if (lifecycle.action === "mark-unread" && threadId === lifecycle.threadId) onUnread?.();
+    }
+    disposeCommandLifecycle(lifecycle);
+    activeLifecycle.current = null;
+    if (command.status === "succeeded") setCommand((current) => current?.generation === lifecycle.generation ? null : current);
   }, [command, onArchived, onUnread, threadId, view]);
-  const mutate = async (action: "archive" | "mark-unread") => {
-    if (!threadId || command) return;
+  const mutate = async (action: CommandAction) => {
+    if (!threadId || command || activeLifecycle.current) return;
+    const lifecycle: CommandLifecycle = { generation: ++lifecycleGeneration.current, commandId: null, threadId, action, controller: new AbortController(), timer: null, polling: false, status: "pending", terminalApplied: false, confirmedEventEmitted: false, disposed: false };
+    activeLifecycle.current = lifecycle;
+    setCommand({ id: "", generation: lifecycle.generation, status: "pending", action, threadId });
     const csrf = document.cookie.split("; ").find((value) => value.startsWith("aio_csrf="))?.slice(9) ?? "";
-    const response = await fetch(`/v1/mailboxes/${mailboxId}/threads/${threadId}/${action}`, { method: "POST", credentials: "include", headers: { "x-csrf-token": csrf, "idempotency-key": crypto.randomUUID() } });
-    const body = await response.json().catch(() => null);
-    if (response.status === 409) { setCommand({ id: "", action, threadId, status: body?.code === "provider_reauthentication_required" ? "reauthorization_required" : "permission_required" }); return; }
-    if (response.ok) setCommand({ id: body.id, status: body.status, action, threadId });
+    try {
+      const response = await fetch(`/v1/mailboxes/${mailboxId}/threads/${threadId}/${action}`, { method: "POST", credentials: "include", headers: { "x-csrf-token": csrf, "idempotency-key": crypto.randomUUID() }, signal: lifecycle.controller.signal });
+      const body = await response.json().catch(() => null);
+      if (activeLifecycle.current !== lifecycle || lifecycle.disposed) return;
+      if (response.status === 409) {
+        const status = body?.code === "provider_reauthentication_required" ? "reauthorization_required" : "permission_required";
+        lifecycle.commandId = "";
+        lifecycle.status = status;
+        setCommand({ id: "", generation: lifecycle.generation, action, threadId, status });
+        return;
+      }
+      if (!response.ok || !body?.id || typeof body.status !== "string") {
+        disposeCommandLifecycle(lifecycle);
+        activeLifecycle.current = null;
+        setCommand((current) => current?.generation === lifecycle.generation ? null : current);
+        return;
+      }
+      lifecycle.commandId = body.id;
+      lifecycle.status = body.status;
+      setCommand({ id: body.id, generation: lifecycle.generation, status: body.status, action, threadId });
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        disposeCommandLifecycle(lifecycle);
+        if (activeLifecycle.current === lifecycle) activeLifecycle.current = null;
+        setCommand((current) => current?.generation === lifecycle.generation ? null : current);
+      }
+    }
   };
   useEffect(() => {
     if (!threadId) { setState("idle"); setThread(null); return; }
