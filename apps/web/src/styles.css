@@ -66,9 +66,19 @@
 /* Provider-backed mailbox search */
 .mailbox-search,.search-panel{height:100%;min-height:0}
 .search-panel{display:flex;flex-direction:column}
-.search-form{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid #e4e7ec;background:#fff}
-.search-form input{min-width:0;flex:1;border:1px solid #d0d5dd;border-radius:8px;padding:9px 11px;color:#101828;font:inherit}
-.search-form input:focus-visible{outline:3px solid #a78bfa;outline-offset:1px;border-color:#7c3aed}
+.search-form{display:block;padding:12px 14px;border-bottom:1px solid #e4e7ec;background:#fff}
+.search-form__primary{display:flex;gap:8px}
+.search-form input,.search-form select{min-width:0;border:1px solid #d0d5dd;border-radius:8px;padding:9px 11px;color:#101828;background:#fff;font:inherit}
+.search-form__primary>input{flex:1}
+.search-form input:focus-visible,.search-form select:focus-visible{outline:3px solid #a78bfa;outline-offset:1px;border-color:#7c3aed}
 .search-form .button{flex:none;margin:0}
+.search-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px;padding:12px;border:1px solid #e4e7ec;border-radius:10px;background:#f8fafc}
+.search-filters[hidden]{display:none}
+.search-filters label{display:grid;gap:5px;color:#344054;font-size:12px;font-weight:600}
+.search-filters .search-filter-check{display:flex;align-items:center;gap:8px;align-self:center;font-size:14px}
+.search-filter-check input{margin:0}
+.search-date-note,.search-summary{margin:8px 0 0;color:#667085;font-size:12px}
+.search-date-note{grid-column:1/-1;margin:0}
 .search-panel>.thread-list{flex:1 1 0;min-height:0}
-@media(max-width:460px){.search-form{display:grid}.search-form .button{width:100%}}
+@media(max-width:760px){.search-form__primary{display:grid;grid-template-columns:1fr 1fr}.search-form__primary>input{grid-column:1/-1}.search-filters{grid-template-columns:1fr 1fr}}
+@media(max-width:460px){.search-form__primary,.search-filters{grid-template-columns:1fr}.search-form .button{width:100%}.search-form__primary>input{grid-column:auto}}

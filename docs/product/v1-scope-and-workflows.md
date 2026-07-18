@@ -4,7 +4,7 @@ Version 1 supports one primary Gmail account per user. The account list is imple
 
 Users can connect Gmail, browse Inbox, All Mail, Sent, and Drafts, read safely rendered conversations, archive a thread, mark it unread, and create, explicitly save, and send application-created drafts. Gmail confirms every mutation before the interface presents it as complete.
 
-Only drafts created by this application are editable. Gmail-native drafts are read-only. Version 1 supports explicit provider-backed keyword and quoted-phrase search. It does not support attachments, reply, forward, scheduled send, undo-send, custom labels, advanced Gmail operators, search history, automation, AI, semantic search, or Gmail-native draft editing.
+Only drafts created by this application are editable. Gmail-native drafts are read-only. Version 1 supports explicit provider-backed keyword and quoted-phrase search with fixed scope, sender, recipient, subject, date, unread, and attachment filters. It does not support attachments in composed mail, reply, forward, scheduled send, undo-send, custom labels, raw or advanced Gmail operators, search history, saved searches, suggestions, automation, AI, semantic search, or Gmail-native draft editing.
 
 ## Keyboard and accessibility
 

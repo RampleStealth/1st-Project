@@ -1,17 +1,18 @@
 import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "@aio/config";
+import type { MailboxSearchCriteria } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
 import type { ProviderThreadMetadata } from "@aio/database/repositories/thread-projection";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
 import { classifyGmailError, isGmailProviderError, sanitizeGmailProviderError } from "@aio/gmail";
 import type { Pool, PoolClient } from "pg";
-import { decodeSearchCursor, encodeSearchCursor, parseSearchRequest, SearchCursorError, SearchRequestError, searchQueryDigest } from "../mailbox-search.js";
+import { decodeSearchCursor, encodeSearchCursor, parseSearchRequest, SearchCursorError, SearchRequestError, searchCriteriaDigest } from "../mailbox-search.js";
 import { correlationId } from "../route-helpers/security.js";
 import { authenticatedUser } from "../route-helpers/session.js";
 
 export type SearchMailboxThreads = (
   mailbox: MailboxAccount,
-  terms: string[],
+  criteria: MailboxSearchCriteria,
   pageToken: string | undefined,
   limit: number
 ) => Promise<{ threads: ProviderThreadMetadata[]; nextPageToken: string | null }>;
@@ -25,7 +26,7 @@ type Dependencies = {
 };
 
 export function registerMailboxSearchRoutes(app: FastifyInstance, dependencies: Dependencies) {
-  app.get<{ Params: { mailboxId: string }; Querystring: { query?: string; cursor?: string; limit?: string } }>(
+  app.get<{ Params: { mailboxId: string }; Querystring: { query?: string; scope?: string; from?: string; to?: string; subject?: string; after?: string; before?: string; unread?: string; hasAttachment?: string; cursor?: string; limit?: string } }>(
     "/v1/mailboxes/:mailboxId/search",
     async (request, reply) => {
       const user = await authenticatedUser(request, dependencies.pool);
@@ -34,13 +35,13 @@ export function registerMailboxSearchRoutes(app: FastifyInstance, dependencies: 
       try {
         search = parseSearchRequest(request.query);
       } catch (error) {
-        if (error instanceof SearchRequestError) return reply.code(400).send({ code: "invalid_search_request", message: "Enter plain keywords or quoted phrases up to 200 characters." });
+        if (error instanceof SearchRequestError) return reply.code(400).send({ code: "invalid_search_request", message: "Check the search terms and filters, then try again.", ...(error.field ? { field: error.field } : {}) });
         throw error;
       }
       const mailbox = await dependencies.findMailboxForUser(request.params.mailboxId, user.id);
       if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found", message: "Mailbox connection not found." });
       if (mailbox.status !== "active") return reply.code(409).send({ code: "provider_reauthentication_required", message: "Reconnect Gmail before searching your mailbox.", retryable: false });
-      const context = { userId: user.id, mailboxId: mailbox.id, queryDigest: searchQueryDigest(search.terms), limit: search.limit };
+      const context = { userId: user.id, mailboxId: mailbox.id, criteriaDigest: searchCriteriaDigest(search.criteria), limit: search.limit };
       let providerPageToken: string | undefined;
       try {
         providerPageToken = search.cursor ? decodeSearchCursor(search.cursor, context, dependencies.config.TOKEN_ENCRYPTION_KEY_BASE64) : undefined;
@@ -50,7 +51,7 @@ export function registerMailboxSearchRoutes(app: FastifyInstance, dependencies: 
       }
       let providerPage: Awaited<ReturnType<SearchMailboxThreads>>;
       try {
-        providerPage = await dependencies.searchMailboxThreads(mailbox, search.terms, providerPageToken, search.limit);
+        providerPage = await dependencies.searchMailboxThreads(mailbox, search.criteria, providerPageToken, search.limit);
       } catch (error) {
         if (isGmailProviderError(error)) {
           request.log.warn(sanitizeGmailProviderError(error, { operation: "gmail_thread_search", mailboxId: mailbox.id, correlationId: correlationId(request) }), "Gmail search failed");

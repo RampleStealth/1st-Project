@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import type { AppConfig } from "@aio/config";
+import type { MailboxSearchCriteria } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
 import { logger } from "@aio/observability";
 import { decryptSecret, deriveSearchCursorKey, encryptSecret } from "@aio/security";
 import type { Pool, PoolClient } from "pg";
 import { createApiApp, type ApiAppDependencies } from "./app.js";
-import { decodeSearchCursor, encodeSearchCursor, parseKeywordSearch, parseSearchRequest, SearchCursorError, SearchRequestError, searchQueryDigest } from "./mailbox-search.js";
+import { decodeSearchCursor, encodeSearchCursor, parseKeywordSearch, parseSearchRequest, SearchCursorError, SearchRequestError, searchCriteriaDigest } from "./mailbox-search.js";
 import { policyForRoute } from "./rate-limit.js";
 
 const config: AppConfig = {
@@ -19,15 +20,16 @@ const mailboxId = "33333333-3333-4333-8333-333333333333";
 const otherMailboxId = "44444444-4444-4444-8444-444444444444";
 function hash(value: string) { return createHash("sha256").update(value).digest("hex"); }
 function mailbox(id: string, userId: string): MailboxAccount { return { id, user_id: userId, provider_account_id: id, email_address: `${id}@example.test`, status: "active", encrypted_refresh_token: "encrypted", granted_scopes: ["gmail.readonly"], last_history_id: null, watch_expires_at: null, last_sync_error: null }; }
+function criteria(overrides: Partial<MailboxSearchCriteria> = {}): MailboxSearchCriteria { return { terms: ["invoice"], scope: "all", from: null, to: null, subject: null, after: null, before: null, unread: false, hasAttachment: false, ...overrides }; }
 
 test("keyword parser canonicalizes Unicode, whitespace, words, and quoted phrases", () => {
   assert.deepEqual(parseKeywordSearch("  cafe\u0301   invoice  \"August   statement\" "), { terms: ["café", "invoice", "August statement"], normalizedQuery: "café invoice \"August statement\"" });
   assert.deepEqual(parseKeywordSearch("\"from:literal@example.test\""), { terms: ["from:literal@example.test"], normalizedQuery: "\"from:literal@example.test\"" });
-  assert.deepEqual(parseSearchRequest({ query: "invoice", limit: "10" }).terms, ["invoice"]);
+  assert.deepEqual(parseSearchRequest({ query: "invoice", limit: "10" }).criteria.terms, ["invoice"]);
 });
 
-test("keyword parser rejects empty, malformed, oversized, operator, control, and unknown input", () => {
-  for (const value of ["", "   ", "from:person@example.test", "\"unterminated", "\"\"", "\"phrase\"suffix", "back\\slash", `ok\nno`, "x".repeat(201)]) {
+test("keyword parser rejects malformed, oversized, operator, control, and unknown input", () => {
+  for (const value of ["from:person@example.test", "\"unterminated", "\"\"", "\"phrase\"suffix", "back\\slash", `ok\nno`, "x".repeat(201)]) {
     assert.throws(() => parseKeywordSearch(value), SearchRequestError, value);
   }
   assert.throws(() => parseSearchRequest({ query: "invoice", unknown: "field" }), SearchRequestError);
@@ -37,21 +39,29 @@ test("keyword parser rejects empty, malformed, oversized, operator, control, and
 test("search cursor is domain-separated, opaque, versioned, expiring, and fully owner-bound", () => {
   const master = config.TOKEN_ENCRYPTION_KEY_BASE64;
   assert.notEqual(deriveSearchCursorKey(master), master);
-  const terms = ["invoice", "August statement"];
-  const context = { userId: ownerId, mailboxId, queryDigest: searchQueryDigest(terms), limit: 10 };
+  const baseCriteria = criteria({ terms: ["invoice", "August statement"] });
+  const context = { userId: ownerId, mailboxId, criteriaDigest: searchCriteriaDigest(baseCriteria), limit: 10 as const };
   const cursor = encodeSearchCursor({ ...context, providerPageToken: "private-gmail-token", expiresAt: Date.now() + 60_000 }, master);
   assert.equal(cursor.includes("private-gmail-token"), false);
   assert.equal(decodeSearchCursor(cursor, context, master), "private-gmail-token");
   for (const mismatch of [
     { ...context, userId: otherUserId },
     { ...context, mailboxId: otherMailboxId },
-    { ...context, queryDigest: searchQueryDigest(["other"]) },
-    { ...context, limit: 9 }
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ terms: ["other"] })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ scope: "inbox" })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ from: "billing@example.test" })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ to: "owner@example.test" })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ subject: "Quarterly report" })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ after: "2026-07-01" })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ before: "2026-08-01" })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ unread: true })) },
+    { ...context, criteriaDigest: searchCriteriaDigest(criteria({ hasAttachment: true })) },
+    { ...context, limit: 9 as never }
   ]) assert.throws(() => decodeSearchCursor(cursor, mismatch, master), SearchCursorError);
   const expired = encodeSearchCursor({ ...context, providerPageToken: "token", expiresAt: Date.now() - 1 }, master);
   assert.throws(() => decodeSearchCursor(expired, context, master), SearchCursorError);
   assert.throws(() => decodeSearchCursor(`${cursor.slice(0, -1)}x`, context, master), SearchCursorError);
-  for (const version of [undefined, 0, 2, "1"]) {
+  for (const version of [undefined, 0, 1, 3, "2"]) {
     const payload = { ...context, providerPageToken: "token", expiresAt: Date.now() + 60_000, ...(version === undefined ? {} : { version }) };
     const invalid = encryptSecret(JSON.stringify(payload), deriveSearchCursorKey(master));
     assert.throws(() => decodeSearchCursor(invalid, context, master), SearchCursorError);
@@ -60,7 +70,7 @@ test("search cursor is domain-separated, opaque, versioned, expiring, and fully 
 
 async function makeApp() {
   const sessions = new Map([[hash("owner-session"), ownerId], [hash("other-session"), otherUserId]]);
-  const calls: Array<{ mailboxId: string; terms: string[]; pageToken: string | undefined; limit: number }> = [];
+  const calls: Array<{ mailboxId: string; criteria: MailboxSearchCriteria; pageToken: string | undefined; limit: number }> = [];
   const client = {
     query: async (text: string, values: unknown[]) => {
       if (text.startsWith("SELECT user_id AS id FROM sessions")) { const id = sessions.get(values[0] as string); return { rows: id ? [{ id }] : [], rowCount: id ? 1 : 0 }; }
@@ -76,8 +86,8 @@ async function makeApp() {
     sanitizedThreadCache: { key: () => "", get: () => undefined, set: () => undefined } as unknown as ApiAppDependencies["sanitizedThreadCache"],
     withTransaction: async (fn) => fn(client),
     findMailboxForUser: async (id, userId) => id === mailboxId && userId === ownerId ? mailbox(mailboxId, ownerId) : null,
-    searchMailboxThreads: async (selectedMailbox, terms, pageToken, limit) => {
-      calls.push({ mailboxId: selectedMailbox.id, terms, pageToken, limit });
+    searchMailboxThreads: async (selectedMailbox, searchCriteria, pageToken, limit) => {
+      calls.push({ mailboxId: selectedMailbox.id, criteria: searchCriteria, pageToken, limit });
       return { threads: [{ id: "provider-thread", messages: [{ id: "provider-message", internalDate: "1784376000000", labelIds: ["INBOX"], snippet: "August", payload: { headers: [{ name: "From", value: "Billing" }, { name: "Subject", value: "Invoice" }] } }] }], nextPageToken: pageToken ? null : "private-next-token" };
     },
     ensureMailboxSyncState: async () => undefined, recordPendingHistory: async () => undefined, enqueueSync: async () => undefined,
@@ -100,7 +110,7 @@ test("search route is authenticated, owner-scoped, normalized, projected, and cu
   assert.equal((await app.inject({ method: "GET", url: route, headers: headers(other) })).statusCode, 404);
   const first = await app.inject({ method: "GET", url: route, headers: headers() });
   assert.equal(first.statusCode, 200);
-  assert.deepEqual(calls[0], { mailboxId, terms: ["invoice", "August statement"], pageToken: undefined, limit: 10 });
+  assert.deepEqual(calls[0], { mailboxId, criteria: criteria({ terms: ["invoice", "August statement"] }), pageToken: undefined, limit: 10 });
   assert.equal(first.json().source, "gmail_search");
   assert.equal(first.json().items[0].providerThreadId, "provider-thread");
   assert.equal(first.json().nextCursor.includes("private-next-token"), false);
@@ -120,8 +130,42 @@ test("search route rejects unsupported syntax and unknown fields before Gmail ac
     assert.equal(response.statusCode, 400, query);
     assert.equal(response.json().code, "invalid_search_request");
   }
-  assert.equal((await app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/search?query=invoice&scope=inbox`, headers: headers() })).statusCode, 400);
+  assert.equal((await app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/search?query=invoice&unknown=value`, headers: headers() })).statusCode, 400);
   assert.equal(calls.length, 0);
   assert.deepEqual(policyForRoute("GET", "/v1/mailboxes/:mailboxId/search"), { category: "mailbox_search", limit: 10, windowMs: 60_000, dimensions: ["ip", "user", "mailbox"] });
+  await app.close();
+});
+
+test("structured filters normalize into one canonical owner-bound provider request", async () => {
+  const { app, calls, headers } = await makeApp();
+  const params = new URLSearchParams({ scope: "inbox", from: "  Billing   Team ", to: "owner@example.test", subject: " Quarterly   report ", after: "2026-07-01", before: "2026-08-01", unread: "true", hasAttachment: "true", limit: "10" });
+  const first = await app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/search?${params}`, headers: headers() });
+  assert.equal(first.statusCode, 200);
+  assert.deepEqual(calls[0].criteria, criteria({ terms: [], scope: "inbox", from: "Billing Team", to: "owner@example.test", subject: "Quarterly report", after: "2026-07-01", before: "2026-08-01", unread: true, hasAttachment: true }));
+  const changed = new URLSearchParams(params); changed.set("scope", "sent"); changed.set("cursor", first.json().nextCursor);
+  const mismatch = await app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/search?${changed}`, headers: headers() });
+  assert.equal(mismatch.statusCode, 400);
+  assert.equal(mismatch.json().code, "invalid_cursor");
+  await app.close();
+});
+
+test("filters validate dates, literals, booleans, effective criteria, and fixed page size before Gmail access", async () => {
+  const { app, calls, headers } = await makeApp();
+  for (const query of [
+    "scope=all",
+    "scope=unknown",
+    "scope=inbox&unread=false",
+    "scope=inbox&from=bad%22operator",
+    "scope=inbox&subject=line%0Abreak",
+    "scope=inbox&after=2026-02-30",
+    "scope=inbox&after=2026-08-01&before=2026-07-01",
+    "scope=inbox&limit=9",
+    "scope=inbox&unknown=value"
+  ]) {
+    const response = await app.inject({ method: "GET", url: `/v1/mailboxes/${mailboxId}/search?${query}`, headers: headers() });
+    assert.equal(response.statusCode, 400, query);
+    assert.equal(response.json().code, "invalid_search_request");
+  }
+  assert.equal(calls.length, 0);
   await app.close();
 });

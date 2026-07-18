@@ -1,4 +1,5 @@
 import type { AppConfig } from "@aio/config";
+import type { MailboxSearchCriteria } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
 import type { ApiAppDependencies } from "./app.js";
 import { createRedisRateLimiter } from "./rate-limit.js";
@@ -11,7 +12,7 @@ export type ProductionDependencyFactories = {
   pool: ApiAppDependencies["pool"];
   withTransaction: ApiAppDependencies["withTransaction"];
   findMailboxForUser: ApiAppDependencies["findMailboxForUser"];
-  searchMailboxThreads: (config: AppConfig, mailbox: MailboxAccount, terms: string[], pageToken: string | undefined, limit: number) => ReturnType<ApiAppDependencies["searchMailboxThreads"]>;
+  searchMailboxThreads: (config: AppConfig, mailbox: MailboxAccount, criteria: MailboxSearchCriteria, pageToken: string | undefined, limit: number) => ReturnType<ApiAppDependencies["searchMailboxThreads"]>;
   ensureMailboxSyncState: ApiAppDependencies["ensureMailboxSyncState"];
   recordPendingHistory: ApiAppDependencies["recordPendingHistory"];
   enqueueSync: ApiAppDependencies["enqueueSync"];
@@ -67,9 +68,9 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     pool,
     withTransaction,
     findMailboxForUser,
-    searchMailboxThreads: async (config, mailbox, terms, pageToken, limit) => {
+    searchMailboxThreads: async (config, mailbox, criteria, pageToken, limit) => {
       const gmail = gmailForMailbox(config, mailbox.encrypted_refresh_token);
-      const page = await searchThreads(gmail, terms, pageToken, limit);
+      const page = await searchThreads(gmail, criteria, pageToken, limit);
       return { threads: await hydrateThreadMetadata(gmail, page.threadIds, 5), nextPageToken: page.nextPageToken };
     },
     ensureMailboxSyncState,
@@ -107,7 +108,7 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       sanitizedThreadCache: factories.createSanitizedThreadCache(),
       withTransaction: factories.withTransaction,
       findMailboxForUser: factories.findMailboxForUser,
-      searchMailboxThreads: (mailbox, terms, pageToken, limit) => factories.searchMailboxThreads(config, mailbox, terms, pageToken, limit),
+      searchMailboxThreads: (mailbox, criteria, pageToken, limit) => factories.searchMailboxThreads(config, mailbox, criteria, pageToken, limit),
       ensureMailboxSyncState: factories.ensureMailboxSyncState,
       recordPendingHistory: factories.recordPendingHistory,
       enqueueSync: factories.enqueueSync,

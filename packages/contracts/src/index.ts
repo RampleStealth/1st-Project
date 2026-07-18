@@ -88,6 +88,21 @@ export const mailboxSearchPageSchema = z.object({
 });
 export type MailboxSearchPage = z.infer<typeof mailboxSearchPageSchema>;
 
+export const mailboxSearchScopeSchema = z.enum(["all", "inbox", "sent", "drafts"]);
+export type MailboxSearchScope = z.infer<typeof mailboxSearchScopeSchema>;
+export const mailboxSearchCriteriaSchema = z.object({
+  terms: z.array(z.string().min(1).max(100)).max(20),
+  scope: mailboxSearchScopeSchema,
+  from: z.string().min(1).max(254).nullable(),
+  to: z.string().min(1).max(254).nullable(),
+  subject: z.string().min(1).max(200).nullable(),
+  after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  unread: z.boolean(),
+  hasAttachment: z.boolean()
+}).strict();
+export type MailboxSearchCriteria = z.infer<typeof mailboxSearchCriteriaSchema>;
+
 export const threadDisplayMessageSchema = z.object({
   id: z.string(), from: z.string().nullable(), to: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()),
   subject: z.string().nullable(), sentAt: z.string().datetime().nullable(), labels: z.array(z.string()),

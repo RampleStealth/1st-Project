@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, GmailSearchValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, searchThreads, sendDraft, threadListLabel, updateDraft } from "./index.js";
+import type { MailboxSearchCriteria } from "@aio/contracts";
+import { archiveThread, classifyGmailMutationError, compileGmailSearch, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, GmailSearchValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, searchThreads, sendDraft, threadListLabel, updateDraft } from "./index.js";
+
+function searchCriteria(overrides: Partial<MailboxSearchCriteria> = {}): MailboxSearchCriteria { return { terms: ["invoice"], scope: "all", from: null, to: null, subject: null, after: null, before: null, unread: false, hasAttachment: false, ...overrides }; }
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -58,26 +61,37 @@ test("mutation error classification is safe for retries, permissions, and uncert
   assert.equal(classifyGmailMutationError({ request: { socket: {} } }), "uncertain_provider_outcome");
 });
 
-test("keyword search constructs only quoted literal Gmail terms and keeps provider pagination server-side", async () => {
+test("structured search compiles fixed operators, system labels, and provider pagination server-side", async () => {
   const calls: unknown[] = [];
   const gmail = { users: { threads: { list: async (input: unknown) => { calls.push(input); return { data: { threads: [{ id: "one" }, { id: null }, { id: "two" }], nextPageToken: "provider-next" } }; } } } };
-  assert.deepEqual(await searchThreads(gmail as never, ["invoice", "August statement", "from:literal@example.test"], "provider-current", 10), { threadIds: ["one", "two"], nextPageToken: "provider-next" });
-  assert.deepEqual(calls, [{ userId: "me", q: "\"invoice\" \"August statement\" \"from:literal@example.test\"", pageToken: "provider-current", maxResults: 10, includeSpamTrash: false }]);
+  const criteria = searchCriteria({ terms: ["invoice", "August statement", "from:literal@example.test"], scope: "inbox", from: "Billing Team", to: "owner@example.test", subject: "Quarterly report", after: "2026-07-01", before: "2026-08-01", unread: true, hasAttachment: true });
+  assert.deepEqual(await searchThreads(gmail as never, criteria, "provider-current", 10), { threadIds: ["one", "two"], nextPageToken: "provider-next" });
+  assert.deepEqual(calls, [{ userId: "me", q: "\"invoice\" \"August statement\" \"from:literal@example.test\" from:\"Billing Team\" to:\"owner@example.test\" subject:\"Quarterly report\" after:2026/07/01 before:2026/08/01 has:attachment", labelIds: ["INBOX", "UNREAD"], pageToken: "provider-current", maxResults: 10, includeSpamTrash: false }]);
 });
 
-test("keyword search rejects unsafe terms and page sizes before Gmail is called", async () => {
+test("structured search maps each scope and filter without accepting raw labels", () => {
+  assert.deepEqual(compileGmailSearch(searchCriteria()), { q: "\"invoice\"", labelIds: undefined });
+  assert.deepEqual(compileGmailSearch(searchCriteria({ terms: [], scope: "sent" })), { q: undefined, labelIds: ["SENT"] });
+  assert.deepEqual(compileGmailSearch(searchCriteria({ terms: [], scope: "drafts", unread: true })), { q: undefined, labelIds: ["DRAFT", "UNREAD"] });
+  assert.deepEqual(compileGmailSearch(searchCriteria({ terms: [], scope: "all", hasAttachment: true })), { q: "has:attachment", labelIds: undefined });
+});
+
+test("structured search rejects unsafe criteria and page sizes before Gmail is called", async () => {
   for (const input of [
-    { terms: [], limit: 10 },
-    { terms: ["quote\"term"], limit: 10 },
-    { terms: ["back\\slash"], limit: 10 },
-    { terms: ["line\nbreak"], limit: 10 },
-    { terms: ["x".repeat(101)], limit: 10 },
-    { terms: ["invoice"], limit: 11 },
-    { terms: ["invoice"], limit: 1.5 }
+    { criteria: searchCriteria({ terms: [], scope: "all" }), limit: 10 },
+    { criteria: searchCriteria({ terms: ["quote\"term"] }), limit: 10 },
+    { criteria: searchCriteria({ terms: ["back\\slash"] }), limit: 10 },
+    { criteria: searchCriteria({ from: "line\nbreak" }), limit: 10 },
+    { criteria: searchCriteria({ subject: "x".repeat(201) }), limit: 10 },
+    { criteria: searchCriteria({ terms: Array.from({ length: 20 }, () => "x".repeat(100)), from: "a".repeat(254), to: "b".repeat(254), subject: "c".repeat(200) }), limit: 10 },
+    { criteria: searchCriteria({ after: "2026-02-30" }), limit: 10 },
+    { criteria: searchCriteria({ after: "2026-08-01", before: "2026-07-01" }), limit: 10 },
+    { criteria: searchCriteria(), limit: 11 },
+    { criteria: searchCriteria(), limit: 1.5 }
   ]) {
     let called = false;
     const gmail = { users: { threads: { list: async () => { called = true; return { data: {} }; } } } };
-    await assert.rejects(() => searchThreads(gmail as never, input.terms, undefined, input.limit), GmailSearchValidationError);
+    await assert.rejects(() => searchThreads(gmail as never, input.criteria, undefined, input.limit), GmailSearchValidationError);
     assert.equal(called, false);
   }
 });
