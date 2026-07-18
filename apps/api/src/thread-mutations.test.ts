@@ -60,6 +60,7 @@ async function makeApp(options: { permission?: string; threads?: Set<string>; ma
       const candidate = mailboxes.get(requestedMailboxId);
       return candidate?.user_id === userId ? candidate : null;
     },
+    searchMailboxThreads: async () => ({ threads: [], nextPageToken: null }),
     ensureMailboxSyncState: async () => undefined,
     recordPendingHistory: async () => undefined,
     enqueueSync: async () => undefined,

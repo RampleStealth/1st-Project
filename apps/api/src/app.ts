@@ -16,6 +16,7 @@ import { registerGoogleAuthRoutes } from "./routes/google-auth.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerMailboxLifecycleRoutes } from "./routes/mailbox-lifecycle.js";
 import { registerMailboxWorkspaceRoutes } from "./routes/mailbox-workspace.js";
+import { registerMailboxSearchRoutes, type SearchMailboxThreads } from "./routes/mailbox-search.js";
 import { registerProviderCommandRoutes } from "./routes/provider-commands.js";
 import { registerThreadMutationRoutes } from "./routes/thread-mutations.js";
 import { registerDraftRoutes } from "./routes/drafts.js";
@@ -33,6 +34,7 @@ export type ApiAppDependencies = {
   sanitizedThreadCache: SanitizedThreadCache;
   withTransaction: <T>(fn: (client: PoolClient) => Promise<T>) => Promise<T>;
   findMailboxForUser: (mailboxAccountId: string, userId: string) => Promise<MailboxAccount | null>;
+  searchMailboxThreads: SearchMailboxThreads;
   ensureMailboxSyncState: (mailboxAccountId: string) => Promise<unknown>;
   recordPendingHistory: (mailboxAccountId: string, historyId: string) => Promise<void>;
   enqueueSync: (job: SyncJob) => Promise<unknown>;
@@ -61,6 +63,7 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
     sanitizedThreadCache,
     withTransaction,
     findMailboxForUser,
+    searchMailboxThreads,
     ensureMailboxSyncState,
     recordPendingHistory,
     enqueueSync,
@@ -131,6 +134,7 @@ export async function createApiApp(dependencies: ApiAppDependencies) {
   });
   registerHealthRoutes(app, { config, pool, redis });
   registerMailboxWorkspaceRoutes(app, { config, pool, withTransaction, sanitizedThreadCache, findMailboxForUser });
+  registerMailboxSearchRoutes(app, { config, pool, withTransaction, findMailboxForUser, searchMailboxThreads });
   registerProviderCommandRoutes(app, { pool });
   registerThreadMutationRoutes(app, { config, pool, findMailboxForUser, insertProviderCommand, isIdempotencyConflictError });
   registerDraftRoutes(app, { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findDraftEditEligibilityForUser, findSendRecoveryCommandForUser, enqueueSendDraftVerification, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError });

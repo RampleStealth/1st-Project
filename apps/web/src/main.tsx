@@ -1,12 +1,13 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { connectionHealth, type MailboxSummary } from "./mailbox-health.js";
 import { ThreadList } from "./thread-list.js";
 import { ThreadReader } from "./thread-reader.js";
 import { DraftComposer } from "./draft-composer.js";
 import { localDraftEditPath } from "./draft-navigation.js";
 import { focusFirstThreadRow, focusThreadRow } from "./workspace-focus.js";
+import { MailboxSearch, normalizeSearchOwnershipQuery } from "./mailbox-search.js";
 import "./styles.css";
 
 const views = [
@@ -39,23 +40,26 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
   return <aside className="sidebar" aria-label="Mailbox navigation">
     <div className="brand"><span aria-hidden="true">✦</span> AI Email Organizer</div>
     <div className="mailbox-identity"><span className="avatar" aria-hidden="true">{mailbox.email_address.slice(0, 1).toUpperCase()}</span><span>{mailbox.email_address}</span></div>
-    <nav aria-label="Mailbox views"><p className="nav-label">Mailbox</p>{views.map(([key, label]) => <NavLink key={key} className={({ isActive }) => `nav-link ${isActive || selectedView === key ? "nav-link--active" : ""}`} to={`/mail/${mailbox.id}/${key}`}>{label}</NavLink>)}</nav>
+    <nav aria-label="Mailbox views"><p className="nav-label">Mailbox</p>{views.map(([key, label]) => <NavLink key={key} className={({ isActive }) => `nav-link ${isActive || selectedView === key ? "nav-link--active" : ""}`} to={`/mail/${mailbox.id}/${key}`}>{label}</NavLink>)}<NavLink className={({ isActive }) => `nav-link ${isActive || selectedView === "search" ? "nav-link--active" : ""}`} to={`/mail/${mailbox.id}/search`}>Search</NavLink></nav>
     <div className="sidebar-footer"><span className="status-dot" aria-hidden="true" /> Gmail connected</div>
   </aside>;
 }
 
-export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
+export function Workspace({ mailbox, mode = "mailbox" }: { mailbox: MailboxSummary; mode?: "mailbox" | "search" }) {
   const { mailboxId: routeMailboxId, view = "inbox", threadId, draftId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get("q") ?? "";
+  const searchMode = mode === "search";
   const selectedView = draftId ? "drafts" : views.some(([key]) => key === view) ? view : "inbox";
-  const workspaceIdentity = `${mailbox.id}:${selectedView}`;
+  const workspaceIdentity = searchMode ? `${mailbox.id}:search:${normalizeSearchOwnershipQuery(searchQuery)}` : `${mailbox.id}:${selectedView}`;
   const lastSelectedThreadId = useRef<string | null>(null);
   useEffect(() => { if (threadId) lastSelectedThreadId.current = threadId; }, [threadId]);
   const closeReader = useCallback((afterArchive = false) => {
     const priorThreadId = lastSelectedThreadId.current;
-    navigate(`/mail/${mailbox.id}/${selectedView}`);
+    navigate(searchMode ? `/mail/${mailbox.id}/search${searchQuery ? `?${new URLSearchParams({ q: searchQuery })}` : ""}` : `/mail/${mailbox.id}/${selectedView}`);
     requestAnimationFrame(() => afterArchive ? focusFirstThreadRow() : priorThreadId && focusThreadRow(priorThreadId));
-  }, [mailbox.id, navigate, selectedView]);
+  }, [mailbox.id, navigate, searchMode, searchQuery, selectedView]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -67,7 +71,7 @@ export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
   }, [closeReader, draftId, mailbox.id, selectedView, threadId]);
   const requestWritePermission = () => window.dispatchEvent(new Event("aio:request-write-permission"));
   if (routeMailboxId !== mailbox.id) return <Navigate to={`/mail/${mailbox.id}/inbox`} replace />;
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column"><ThreadList key={workspaceIdentity} mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer key={`${workspaceIdentity}:local:${draftId}`} mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : selectedView === "drafts" && !threadId ? <DraftComposer key={`${workspaceIdentity}:new`} mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader key={`${workspaceIdentity}:thread:${threadId ?? "none"}`} mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={searchMode ? "search" : selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column">{searchMode ? <MailboxSearch key={workspaceIdentity} mailboxId={mailbox.id} query={searchQuery} selectedThreadId={threadId} /> : <ThreadList key={workspaceIdentity} mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} />}</section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer key={`${workspaceIdentity}:local:${draftId}`} mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : !searchMode && selectedView === "drafts" && !threadId ? <DraftComposer key={`${workspaceIdentity}:new`} mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader key={`${workspaceIdentity}:thread:${threadId ?? "none"}`} mailboxId={mailbox.id} threadId={threadId} view={searchMode ? "search" : selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
 }
 
 function App() {
@@ -91,7 +95,7 @@ function App() {
   if (state === "loading") return <main className="center-state" aria-live="polite"><div className="loading-mark" aria-hidden="true" /><h1>Loading your workspace</h1><p>Checking your Gmail connection.</p></main>;
   if (state === "error") return <main className="center-state"><div><p className="eyebrow">Connection problem</p><h1>We could not load your mailbox</h1><p>Check your connection and try again.</p><button className="button" type="button" onClick={() => void load()}>Try again</button></div></main>;
   if (state === "disconnected" || !mailbox) return <main className="center-state"><div><p className="eyebrow">Gmail connection</p><h1>Connect Gmail to start</h1><p>Your mailbox workspace appears here after you connect a Gmail account.</p><ConnectMailbox /></div></main>;
-  return <Routes><Route path="/mail/:mailboxId/drafts/local/:draftId" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view/:threadId" element={<Workspace mailbox={mailbox} />} /><Route path="*" element={<Navigate to={`/mail/${mailbox.id}/inbox`} replace />} /></Routes>;
+  return <Routes><Route path="/mail/:mailboxId/search" element={<Workspace mailbox={mailbox} mode="search" />} /><Route path="/mail/:mailboxId/search/:threadId" element={<Workspace mailbox={mailbox} mode="search" />} /><Route path="/mail/:mailboxId/drafts/local/:draftId" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view/:threadId" element={<Workspace mailbox={mailbox} />} /><Route path="*" element={<Navigate to={`/mail/${mailbox.id}/inbox`} replace />} /></Routes>;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><BrowserRouter><App /></BrowserRouter></StrictMode>);

@@ -11,6 +11,9 @@ const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
 export class GmailPaginationValidationError extends Error {
   constructor() { super("Gmail page size must be an integer from 1 through 100"); this.name = "GmailPaginationValidationError"; }
 }
+export class GmailSearchValidationError extends Error {
+  constructor() { super("Gmail search accepts one to twenty normalized literal terms and at most ten results"); this.name = "GmailSearchValidationError"; }
+}
 
 export function createOAuthClient(config: AppConfig) {
   return new google.auth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, config.GOOGLE_REDIRECT_URI);
@@ -215,6 +218,23 @@ export async function listThreads(gmail: gmail_v1.Gmail, view: MailboxView, page
   if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 100) throw new GmailPaginationValidationError();
   const label = threadListLabel(view);
   const response = await observeGmail("threads.list", () => gmail.users.threads.list({ userId: "me", labelIds: label ? [label] : undefined, pageToken, maxResults, includeSpamTrash: false }));
+  return { threadIds: response.data.threads?.flatMap((thread) => thread.id ? [thread.id] : []) ?? [], nextPageToken: response.data.nextPageToken ?? null };
+}
+
+/** Searches literal keyword terms only. Gmail operator syntax is not accepted at this boundary. */
+export async function searchThreads(gmail: gmail_v1.Gmail, terms: string[], pageToken: string | undefined, maxResults: number) {
+  const validTerms = Array.isArray(terms)
+    && terms.length >= 1
+    && terms.length <= 20
+    && terms.every((term) => typeof term === "string"
+      && term.length >= 1
+      && [...term].length <= 100
+      && term === term.normalize("NFC")
+      && term === term.trim()
+      && !/[\u0000-\u001f\u007f-\u009f"\\]/u.test(term));
+  if (!validTerms || !Number.isInteger(maxResults) || maxResults < 1 || maxResults > 10) throw new GmailSearchValidationError();
+  const q = terms.map((term) => `"${term}"`).join(" ");
+  const response = await observeGmail("threads.search", () => gmail.users.threads.list({ userId: "me", q, pageToken, maxResults, includeSpamTrash: false }));
   return { threadIds: response.data.threads?.flatMap((thread) => thread.id ? [thread.id] : []) ?? [], nextPageToken: response.data.nextPageToken ?? null };
 }
 

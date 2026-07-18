@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, sendDraft, threadListLabel, updateDraft } from "./index.js";
+import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, GmailSearchValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, searchThreads, sendDraft, threadListLabel, updateDraft } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -56,6 +56,30 @@ test("mutation error classification is safe for retries, permissions, and uncert
   assert.equal(classifyGmailMutationError({ response: { status: 403, data: { error: { code: 403, status: "PERMISSION_DENIED", message: "Request had insufficient authentication scopes.", errors: [{ reason: "insufficientPermissions" }] } } } }), "write_scope_required");
   assert.equal(classifyGmailMutationError({ response: { status: 400, data: { error: { code: 400, status: "INVALID_ARGUMENT" } } } }), "provider_rejected");
   assert.equal(classifyGmailMutationError({ request: { socket: {} } }), "uncertain_provider_outcome");
+});
+
+test("keyword search constructs only quoted literal Gmail terms and keeps provider pagination server-side", async () => {
+  const calls: unknown[] = [];
+  const gmail = { users: { threads: { list: async (input: unknown) => { calls.push(input); return { data: { threads: [{ id: "one" }, { id: null }, { id: "two" }], nextPageToken: "provider-next" } }; } } } };
+  assert.deepEqual(await searchThreads(gmail as never, ["invoice", "August statement", "from:literal@example.test"], "provider-current", 10), { threadIds: ["one", "two"], nextPageToken: "provider-next" });
+  assert.deepEqual(calls, [{ userId: "me", q: "\"invoice\" \"August statement\" \"from:literal@example.test\"", pageToken: "provider-current", maxResults: 10, includeSpamTrash: false }]);
+});
+
+test("keyword search rejects unsafe terms and page sizes before Gmail is called", async () => {
+  for (const input of [
+    { terms: [], limit: 10 },
+    { terms: ["quote\"term"], limit: 10 },
+    { terms: ["back\\slash"], limit: 10 },
+    { terms: ["line\nbreak"], limit: 10 },
+    { terms: ["x".repeat(101)], limit: 10 },
+    { terms: ["invoice"], limit: 11 },
+    { terms: ["invoice"], limit: 1.5 }
+  ]) {
+    let called = false;
+    const gmail = { users: { threads: { list: async () => { called = true; return { data: {} }; } } } };
+    await assert.rejects(() => searchThreads(gmail as never, input.terms, undefined, input.limit), GmailSearchValidationError);
+    assert.equal(called, false);
+  }
 });
 
 test("mutation diagnostics retain only safe status and Google reason fields", () => {

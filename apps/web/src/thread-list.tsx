@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { decodeDisplayEntities } from "./display-text.js";
 
-type ThreadItem = { id: string; providerThreadId: string; subject: string | null; latestSender: string | null; preview: string | null; lastMessageAt: string | null; unreadCount: number; messageCount: number; hasAttachments: boolean | null; hasDraft: boolean; labels: string[]; };
+export type ThreadItem = { id: string; providerThreadId: string; subject: string | null; latestSender: string | null; preview: string | null; lastMessageAt: string | null; unreadCount: number; messageCount: number; hasAttachments: boolean | null; hasDraft: boolean; labels: string[]; };
 type Page = { items: ThreadItem[]; nextCursor: string | null; source: "gmail"; fetchedAt: string };
 type Owned<T> = { owner: string; value: T };
 
@@ -10,7 +10,7 @@ function formatDate(value: string | null) {
   return value ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value)) : "";
 }
 
-function ThreadRow({ thread, selected, onSelect }: { thread: ThreadItem; selected: boolean; onSelect: () => void }) {
+export function ThreadRow({ thread, selected, onSelect }: { thread: ThreadItem; selected: boolean; onSelect: () => void }) {
   const unread = thread.unreadCount > 0;
   const sender = decodeDisplayEntities(thread.latestSender) || "Unknown sender";
   const subject = decodeDisplayEntities(thread.subject) || "(No subject)";

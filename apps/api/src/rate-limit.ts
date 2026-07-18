@@ -62,6 +62,7 @@ export function policyForRoute(method: string, route: string): RateLimitPolicy |
   if (route === "/v1/auth/google/start" || route === "/v1/auth/google/callback" || route === "/v1/auth/google/write/callback") return { category: "oauth", limit: 20, windowMs: 60_000, dimensions: ["ip"] };
   if (route === "/diagnostics") return { category: "diagnostics", limit: 20, windowMs: 60_000, dimensions: ["ip"] };
   if (route === "/v1/mailboxes/:mailboxId/threads/:threadId" && method === "GET") return { category: "thread_read", limit: 120, windowMs: 60_000, dimensions: ["ip", "user", "mailbox"] };
+  if (route === "/v1/mailboxes/:mailboxId/search" && method === "GET") return { category: "mailbox_search", limit: 10, windowMs: 60_000, dimensions: ["ip", "user", "mailbox"] };
   if (method === "GET" && route.startsWith("/v1/mailboxes")) return { category: "mailbox_read", limit: 240, windowMs: 60_000, dimensions: ["ip", "user", "mailbox"] };
   if (route.includes("/send-verification")) return { category: "verification", limit: 10, windowMs: 60_000, dimensions: ["ip", "user", "mailbox"] };
   if (route.includes("/drafts")) return { category: "draft_mutation", limit: 30, windowMs: 60_000, dimensions: ["ip", "user", "mailbox"] };

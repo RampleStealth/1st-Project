@@ -62,3 +62,13 @@
 @media(max-width:980px){.workspace-main{padding:16px}.mail-layout{grid-template-columns:minmax(300px,.9fr) minmax(0,1.25fr);height:calc(100vh - 140px)}.thread-reader{padding:24px}.reader-header{top:-24px;margin:-24px -24px 22px;padding:20px 24px 16px}.reader-header h1{font-size:21px}}
 @media(max-width:800px){.mail-layout{height:auto;min-height:calc(100vh - 178px)}.reader-column{display:none}.mail-layout--reader-open .thread-column{display:none}.mail-layout--reader-open .reader-column{display:block;min-height:calc(100vh - 178px)}.thread-column{min-height:calc(100vh - 178px)}.thread-reader{padding:20px 16px}.reader-header{top:-20px;margin:-20px -16px 20px;padding:16px;gap:14px;align-items:flex-start}.reader-header h1{font-size:20px}.reader-toolbar{justify-content:flex-start}.reader-close{display:inline-block}.message header{gap:10px}.message-html{min-height:220px}}
 @media(max-width:460px){.reader-toolbar{width:100%;justify-content:flex-start}.reader-toolbar .button{flex:1 1 auto}.message header{display:grid}.message header time{text-align:left}.thread-row{min-height:96px}}
+
+/* Provider-backed mailbox search */
+.mailbox-search,.search-panel{height:100%;min-height:0}
+.search-panel{display:flex;flex-direction:column}
+.search-form{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid #e4e7ec;background:#fff}
+.search-form input{min-width:0;flex:1;border:1px solid #d0d5dd;border-radius:8px;padding:9px 11px;color:#101828;font:inherit}
+.search-form input:focus-visible{outline:3px solid #a78bfa;outline-offset:1px;border-color:#7c3aed}
+.search-form .button{flex:none;margin:0}
+.search-panel>.thread-list{flex:1 1 0;min-height:0}
+@media(max-width:460px){.search-form{display:grid}.search-form .button{width:100%}}

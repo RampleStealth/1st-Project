@@ -80,6 +80,14 @@ export const threadListPageSchema = z.object({
 });
 export type ThreadListPage = z.infer<typeof threadListPageSchema>;
 
+export const mailboxSearchPageSchema = z.object({
+  items: z.array(threadListItemSchema),
+  nextCursor: z.string().min(1).nullable(),
+  source: z.literal("gmail_search"),
+  fetchedAt: z.coerce.date()
+});
+export type MailboxSearchPage = z.infer<typeof mailboxSearchPageSchema>;
+
 export const threadDisplayMessageSchema = z.object({
   id: z.string(), from: z.string().nullable(), to: z.array(z.string()), cc: z.array(z.string()), bcc: z.array(z.string()),
   subject: z.string().nullable(), sentAt: z.string().datetime().nullable(), labels: z.array(z.string()),

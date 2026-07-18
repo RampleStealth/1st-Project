@@ -4,6 +4,7 @@ import { providerCommandPayloadDefinitions, type CanonicalDraftContent, type Pro
 const algorithm = "aes-256-gcm";
 const cursorDerivationSalt = Buffer.from("aio/key-derivation-salt/v1", "utf8");
 const cursorDerivationContext = Buffer.from("aio/thread-pagination-cursor/v1", "utf8");
+const searchCursorDerivationContext = Buffer.from("aio/mailbox-search-cursor/v1", "utf8");
 const draftFingerprintDerivationContext = Buffer.from("aio/draft-content-fingerprint/v1", "utf8");
 
 function masterKey(keyBase64: string) {
@@ -15,6 +16,11 @@ function masterKey(keyBase64: string) {
 /** Derives a purpose-specific AES-256 key; master-key encryption behavior remains unchanged. */
 export function deriveThreadCursorKey(masterKeyBase64: string): string {
   return Buffer.from(hkdfSync("sha256", masterKey(masterKeyBase64), cursorDerivationSalt, cursorDerivationContext, 32)).toString("base64");
+}
+
+/** Search cursors have a separate cryptographic domain from mailbox-list cursors. */
+export function deriveSearchCursorKey(masterKeyBase64: string): string {
+  return Buffer.from(hkdfSync("sha256", masterKey(masterKeyBase64), cursorDerivationSalt, searchCursorDerivationContext, 32)).toString("base64");
 }
 
 /** Derives a purpose-specific key so content fingerprints cannot be reversed or reused as encryption keys. */
