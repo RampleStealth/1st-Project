@@ -3,7 +3,7 @@ import test from "node:test";
 import { loadConfig } from "./index.js";
 
 const valid = {
-  NODE_ENV: "production", APP_ORIGIN: "https://app.example.test", API_ORIGIN: "https://app.example.test",
+  NODE_ENV: "production", APP_ORIGIN: "https://app.example.test", API_ORIGIN: "https://app.example.test", DRAFT_MESSAGE_ID_DOMAIN: "drafts.example.test",
   DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379",
   GOOGLE_CLIENT_ID: "client", GOOGLE_CLIENT_SECRET: "not-a-placeholder-secret", GOOGLE_REDIRECT_URI: "https://app.example.test/v1/auth/google/callback",
   GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "https://app.example.test/v1/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test",
@@ -25,4 +25,27 @@ test("configuration enforces callback, Pub/Sub, body-size, and rotation invarian
   const previous = "previous-session-secret-with-entropy-456";
   const loaded = loadConfig({ ...valid, SESSION_SECRET_PREVIOUS: previous });
   assert.equal(loaded.SESSION_SECRET_PREVIOUS, previous);
+});
+
+test("draft Message-ID domain is explicit and rejects origins, ports, email addresses, and missing values", () => {
+  assert.equal(loadConfig({ ...valid, DRAFT_MESSAGE_ID_DOMAIN: "Drafts.Example.Test" }).DRAFT_MESSAGE_ID_DOMAIN, "Drafts.Example.Test");
+  for (const value of ["https://drafts.example.test", "drafts.example.test:4000", "user@example.test", "", "   "]) {
+    assert.throws(() => loadConfig({ ...valid, DRAFT_MESSAGE_ID_DOMAIN: value }), /DNS-style domain|String must contain/);
+  }
+  const { DRAFT_MESSAGE_ID_DOMAIN: _missing, ...missing } = valid;
+  assert.throws(() => loadConfig(missing), /Required/);
+});
+
+test("local development accepts an explicit reserved test domain independently of localhost origins", () => {
+  const development = loadConfig({
+    ...valid,
+    NODE_ENV: "development",
+    APP_ORIGIN: "http://localhost:5173",
+    API_ORIGIN: "http://localhost:4000",
+    DRAFT_MESSAGE_ID_DOMAIN: "drafts.localhost.test",
+    GOOGLE_REDIRECT_URI: "http://localhost:4000/v1/auth/google/callback",
+    PUBSUB_PUSH_AUDIENCE: "http://localhost:4000/v1/webhooks/gmail",
+    TRUST_PROXY: "false"
+  });
+  assert.equal(development.DRAFT_MESSAGE_ID_DOMAIN, "drafts.localhost.test");
 });

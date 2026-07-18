@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { draftMessageIdDomainSchema } from "@aio/contracts";
 
 const placeholderSecretPattern = /^(?:change[-_]?me|example|placeholder|your[-_]?secret|secret)$/i;
 const nonPlaceholderSecret = (minimum: number) => z.string().min(minimum)
@@ -15,6 +16,7 @@ const configSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_ORIGIN: z.string().url(),
   API_ORIGIN: z.string().url(),
+  DRAFT_MESSAGE_ID_DOMAIN: draftMessageIdDomainSchema,
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   GOOGLE_CLIENT_ID: z.string().min(1),

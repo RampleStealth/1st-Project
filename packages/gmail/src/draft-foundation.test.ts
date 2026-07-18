@@ -79,7 +79,10 @@ test("MIME builder blocks header injection, malformed recipients, and oversized 
 
 test("stable application-owned RFC 5322 Message-IDs are generated without MIME or Gmail access", () => {
   assert.equal(generateDraftMessageId("message.example.test", "11111111-1111-4111-8111-111111111111"), messageId);
-  assert.throws(() => generateDraftMessageId("invalid domain", "11111111-1111-4111-8111-111111111111"), DraftValidationError);
+  assert.equal(generateDraftMessageId("Drafts.Localhost.Test", "11111111-1111-4111-8111-111111111111"), "<11111111-1111-4111-8111-111111111111@drafts.localhost.test>");
+  for (const domain of ["https://message.example.test", "message.example.test:4000", "user@example.test", "", "invalid domain"]) {
+    assert.throws(() => generateDraftMessageId(domain, "11111111-1111-4111-8111-111111111111"), DraftValidationError);
+  }
 });
 
 test("draft migration contains required lifecycle and send-safety invariants", async () => {

@@ -8,7 +8,7 @@ import { InMemoryRateLimiter, createRedisRateLimiter, type RateLimiter } from ".
 
 function config(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
-    NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test",
+    NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DRAFT_MESSAGE_ID_DOMAIN: "drafts.example.test",
     DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379",
     GOOGLE_CLIENT_ID: "client", GOOGLE_CLIENT_SECRET: "secret-value-not-placeholder", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback",
     GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/v1/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test",

@@ -4,7 +4,7 @@ Milestone 1 provides secure Gmail connection lifecycle and reliable metadata syn
 
 ## Local setup
 
-1. Copy `.env.example` to `.env` and populate Google OAuth, Pub/Sub, encryption, and session values.
+1. Populate `.env` with Google OAuth, Pub/Sub, encryption, and session values. Set `DRAFT_MESSAGE_ID_DOMAIN=drafts.localhost.test` for local development; production must use a DNS domain controlled by the deployment owner.
 2. Start PostgreSQL and Redis with `docker compose up -d`.
 3. Install dependencies with `npm install`.
 4. Run `npm run db:migrate`.

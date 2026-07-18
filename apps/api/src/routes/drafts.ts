@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppConfig } from "@aio/config";
 import type { MailboxAccount } from "@aio/database";
 import type { DraftContentInput } from "@aio/contracts";
-import { canonicalizeDraftContent, generateDraftMessageId } from "@aio/gmail";
+import { canonicalizeDraftContent, DraftValidationError, generateDraftMessageId } from "@aio/gmail";
 import { decryptDraftContent, encryptDraftContent, encryptProviderCommandPayload, fingerprintDraftContent } from "@aio/security";
 import type { Pool } from "pg";
 import { correlationId, requireCsrf } from "../route-helpers/security.js";
@@ -68,12 +68,22 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
     catch { return reply.code(400).send({ code: "invalid_draft_content" }); }
     const fingerprint = fingerprintDraftContent(content, config.TOKEN_ENCRYPTION_KEY_BASE64);
     const encryptedContent = encryptDraftContent(content, config.TOKEN_ENCRYPTION_KEY_BASE64);
+    let rfc822MessageId: string;
+    try {
+      rfc822MessageId = generateDraftMessageId(config.DRAFT_MESSAGE_ID_DOMAIN);
+    } catch (error) {
+      if (error instanceof DraftValidationError && error.code === "invalid_message_id_domain") {
+        request.log.error({ code: "draft_message_id_configuration_invalid" }, "draft creation configuration is invalid");
+        return reply.code(503).send({ code: "draft_configuration_invalid", message: "Draft creation is temporarily unavailable." });
+      }
+      throw error;
+    }
     try {
       const draftId = randomUUID();
       const command = await createDraftWithCommand({
         draftId,
         mailboxId: mailbox.id,
-        rfc822MessageId: generateDraftMessageId(new URL(config.API_ORIGIN).hostname),
+        rfc822MessageId,
         contentFingerprint: fingerprint,
         ...encryptedContent,
         recipientCount: content.to.length + content.cc.length + content.bcc.length,

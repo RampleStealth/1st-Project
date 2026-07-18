@@ -8,6 +8,12 @@ export const draftLimits = {
   maxHtmlBytes: 256 * 1024
 } as const;
 
+/** DNS-style identity used in application-owned RFC 5322 Message-IDs. */
+export const draftMessageIdDomainSchema = z.string().trim().min(1).regex(
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/,
+  "must be a DNS-style domain such as drafts.example.com"
+);
+
 export const draftStatusSchema = z.enum([
   "creating",
   "ready",

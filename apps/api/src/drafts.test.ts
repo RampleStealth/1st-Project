@@ -8,7 +8,7 @@ import { logger } from "@aio/observability";
 import { decryptDraftContent, decryptProviderCommandPayload } from "@aio/security";
 import { createApiApp, type ApiAppDependencies } from "./app.js";
 
-const config: AppConfig = { NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379", GOOGLE_CLIENT_ID: "client", GOOGLE_CLIENT_SECRET: "secret", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback", GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test", GMAIL_INITIAL_SYNC_LIMIT: 500, SYNC_RECONCILIATION_INTERVAL_MINUTES: 30, TOKEN_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 5).toString("base64"), SESSION_SECRET: "a".repeat(32), TRUST_PROXY: false, API_BODY_LIMIT_BYTES: 600 * 1024, WEBHOOK_BODY_LIMIT_BYTES: 64 * 1024, PORT: 4000, WEB_PORT: 3000 };
+const config: AppConfig = { NODE_ENV: "test", APP_ORIGIN: "http://app.example.test", API_ORIGIN: "http://app.example.test", DRAFT_MESSAGE_ID_DOMAIN: "drafts.example.test", DATABASE_URL: "postgres://user:password@localhost:5432/aio", REDIS_URL: "redis://localhost:6379", GOOGLE_CLIENT_ID: "client", GOOGLE_CLIENT_SECRET: "secret", GOOGLE_REDIRECT_URI: "http://app.example.test/v1/auth/google/callback", GOOGLE_PUBSUB_TOPIC: "projects/project/topics/topic", GOOGLE_CLOUD_PROJECT: "project", PUBSUB_PUSH_AUDIENCE: "http://app.example.test/webhooks/gmail", PUBSUB_SERVICE_ACCOUNT_EMAIL: "push@example.test", GMAIL_INITIAL_SYNC_LIMIT: 500, SYNC_RECONCILIATION_INTERVAL_MINUTES: 30, TOKEN_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 5).toString("base64"), SESSION_SECRET: "a".repeat(32), TRUST_PROXY: false, API_BODY_LIMIT_BYTES: 600 * 1024, WEBHOOK_BODY_LIMIT_BYTES: 64 * 1024, PORT: 4000, WEB_PORT: 3000 };
 const ownerId = "11111111-1111-4111-8111-111111111111";
 const otherId = "22222222-2222-4222-8222-222222222222";
 const mailboxId = "33333333-3333-4333-8333-333333333333";
@@ -17,7 +17,7 @@ const input = { to: ["recipient@example.test"], cc: [], bcc: [], subject: "Subje
 function hash(value: string) { return createHash("sha256").update(value).digest("hex"); }
 function mailbox(userId = ownerId): MailboxAccount { return { id: mailboxId, user_id: userId, provider_account_id: "account", email_address: "owner@example.test", status: "active", encrypted_refresh_token: "encrypted", granted_scopes: [], last_history_id: null, watch_expires_at: null, last_sync_error: null }; }
 
-async function makeApp(options: { permission?: string; draft?: any; recoveryCommand?: { id: string; status: string } | null } = {}) {
+async function makeApp(options: { permission?: string; draft?: any; recoveryCommand?: { id: string; status: string } | null; config?: AppConfig } = {}) {
   const sessions = new Map([[hash("owner"), ownerId], [hash("other"), otherId]]);
   const captured: any[] = []; const existing = new Map<string, any>(); let storedDraft = options.draft ?? null;
   const client = { query: async (text: string, values: unknown[] = []) => {
@@ -26,7 +26,7 @@ async function makeApp(options: { permission?: string; draft?: any; recoveryComm
     throw new Error(`Unexpected query: ${text}`);
   } } as unknown as PoolClient;
   const dependencies: ApiAppDependencies = {
-    config, logger, pool: client as unknown as Pool, redis: { set: async () => "OK", getdel: async () => null, quit: async () => "OK" } as never, pubsubVerifier: {} as never,
+    config: options.config ?? config, logger, pool: client as unknown as Pool, redis: { set: async () => "OK", getdel: async () => null, quit: async () => "OK" } as never, pubsubVerifier: {} as never,
     sanitizedThreadCache: { key: () => "", get: () => undefined, set: () => undefined } as never, withTransaction: async (fn) => fn(client),
     findMailboxForUser: async (id, user) => id === mailboxId && user === ownerId ? mailbox() : null, ensureMailboxSyncState: async () => undefined, recordPendingHistory: async () => undefined, enqueueSync: async () => undefined,
     insertProviderCommand: async () => ({ id: "thread-command", commandType: "archive_thread", status: "pending" }),
@@ -72,6 +72,21 @@ test("draft creation stores only encrypted content and returns normalized comman
   assert.deepEqual(decryptDraftContent(getDraft(), config.TOKEN_ENCRYPTION_KEY_BASE64), input);
   assert.deepEqual(decryptProviderCommandPayload("create_draft", captured[0].encryptedCommandPayload, config.TOKEN_ENCRYPTION_KEY_BASE64), { commandType: "create_draft", payload: { version: 1, draftId: accepted.json().draftId } });
   await app.close();
+});
+
+test("draft creation uses the configured Message-ID domain and rejects invalid injected configuration before persistence", async () => {
+  const valid = await makeApp();
+  const accepted = await valid.app.inject({ method: "POST", url: `/v1/mailboxes/${mailboxId}/drafts`, headers: valid.headers(), payload: input });
+  assert.equal(accepted.statusCode, 202);
+  assert.match(valid.captured[0].rfc822MessageId, /^<[^@]+@drafts\.example\.test>$/);
+  await valid.app.close();
+
+  const invalid = await makeApp({ config: { ...config, DRAFT_MESSAGE_ID_DOMAIN: "localhost" } as AppConfig });
+  const rejected = await invalid.app.inject({ method: "POST", url: `/v1/mailboxes/${mailboxId}/drafts`, headers: invalid.headers(), payload: input });
+  assert.equal(rejected.statusCode, 503);
+  assert.deepEqual(rejected.json(), { code: "draft_configuration_invalid", message: "Draft creation is temporarily unavailable." });
+  assert.equal(invalid.captured.length, 0, "the draft repository boundary must not be entered");
+  await invalid.app.close();
 });
 
 test("draft reads are owner-scoped, decrypt after ownership, and expose no storage metadata", async () => {

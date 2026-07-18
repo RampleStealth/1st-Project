@@ -13,6 +13,7 @@ const config: AppConfig = {
   NODE_ENV: "test",
   APP_ORIGIN: "http://app.example.test",
   API_ORIGIN: "http://app.example.test",
+  DRAFT_MESSAGE_ID_DOMAIN: "drafts.example.test",
   DATABASE_URL: "postgres://user:password@localhost:5432/aio",
   REDIS_URL: "redis://localhost:6379",
   GOOGLE_CLIENT_ID: "client-id",

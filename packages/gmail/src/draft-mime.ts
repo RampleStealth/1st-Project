@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { draftContentInputSchema, draftLimits, type CanonicalDraftContent, type DraftContentInput } from "@aio/contracts";
+import { draftContentInputSchema, draftLimits, draftMessageIdDomainSchema, type CanonicalDraftContent, type DraftContentInput } from "@aio/contracts";
 import { sanitizeMessageHtml } from "./thread-display.js";
 
 const recipientPattern = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -56,10 +56,11 @@ export function canonicalizeDraftContent(input: DraftContentInput): CanonicalDra
 }
 
 export function generateDraftMessageId(domain: string, uuid = randomUUID()) {
-  const normalizedDomain = domain.trim().toLowerCase();
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(normalizedDomain)) {
+  const parsed = draftMessageIdDomainSchema.safeParse(domain);
+  if (!parsed.success) {
     throw new DraftValidationError("invalid_message_id_domain");
   }
+  const normalizedDomain = parsed.data.toLowerCase();
   return `<${uuid}@${normalizedDomain}>`;
 }
 
