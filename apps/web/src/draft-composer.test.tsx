@@ -100,6 +100,77 @@ describe("draft composer", () => {
     expect(vi.mocked(fetch)).toHaveBeenLastCalledWith("/v1/mailboxes/mailbox/drafts/draft/send", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "if-match": "\"1\"" }) }));
     expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain("gmail.googleapis.com");
   });
+  it("treats confirmed send as terminal without reloading or showing a save failure", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/drafts/draft") && !init?.method) return { ok: true, status: 200, json: async () => readyDraft } as Response;
+      if (url.endsWith("/drafts/draft/send")) return { ok: true, status: 202, json: async () => ({ id: "send", draftId: "draft", status: "pending" }) } as Response;
+      if (url.endsWith("/provider-commands/send")) return { ok: true, status: 200, json: async () => ({ id: "send", commandType: "send_draft", status: "succeeded" }) } as Response;
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sending...")).toBeTruthy();
+    expect(await screen.findByText("Sent", {}, { timeout: 2_000 })).toBeTruthy();
+    expect(screen.queryByText(/could not save this draft/i)).toBeNull();
+    const draftReads = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input).endsWith("/drafts/draft") && !init?.method);
+    expect(draftReads).toHaveLength(1);
+  });
+  it("renders an owner-scoped sent projection as confirmation even though it is no longer editable", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ...readyDraft, status: "sent", editable: false, writeGranted: false }) } as Response);
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    expect(await screen.findByText("Sent")).toBeTruthy();
+    expect(screen.queryByText(/could not save this draft/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save draft" })).toBeNull();
+  });
+  it("stops polling after one confirmed send and ignores any hypothetical late nonterminal result", async () => {
+    let statusReads = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/drafts/draft") && !init?.method) return { ok: true, status: 200, json: async () => readyDraft } as Response;
+      if (url.endsWith("/drafts/draft/send")) return { ok: true, status: 202, json: async () => ({ id: "send", draftId: "draft", status: "pending" }) } as Response;
+      if (url.endsWith("/provider-commands/send")) {
+        statusReads += 1;
+        return { ok: true, status: 200, json: async () => statusReads === 1 ? ({ id: "send", commandType: "send_draft", status: "succeeded" }) : ({ id: "send", commandType: "send_draft", status: "pending" }) } as Response;
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sent", {}, { timeout: 2_000 })).toBeTruthy();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 900)); });
+    expect(statusReads).toBe(1);
+    expect(screen.getAllByText("Sent")).toHaveLength(1);
+    expect(screen.queryByText("Sending...")).toBeNull();
+  });
+  it("preserves send recovery semantics without presenting a save failure", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/drafts/draft") && !init?.method) return { ok: true, status: 200, json: async () => readyDraft } as Response;
+      if (url.endsWith("/drafts/draft/send")) return { ok: true, status: 202, json: async () => ({ id: "send", draftId: "draft", status: "pending" }) } as Response;
+      if (url.endsWith("/provider-commands/send")) return { ok: true, status: 200, json: async () => ({ id: "send", commandType: "send_draft", status: "recovery_required", failureCode: "provider_execution_uncertain" }) } as Response;
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Send" }));
+    expect(await screen.findByText(/verification before this send can be confirmed/i, {}, { timeout: 2_000 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check Gmail status" })).toBeTruthy();
+    expect(screen.queryByText(/could not save this draft/i)).toBeNull();
+  });
+  it("keeps the save-failure message for an actual update failure", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/drafts/draft") && !init?.method) return { ok: true, status: 200, json: async () => readyDraft } as Response;
+      if (url.endsWith("/drafts/draft") && init?.method === "PUT") return { ok: true, status: 202, json: async () => ({ id: "update", draftId: "draft", status: "pending" }) } as Response;
+      if (url.endsWith("/provider-commands/update")) return { ok: true, status: 200, json: async () => ({ id: "update", commandType: "update_draft", status: "failed", failureCode: "provider_rejected" }) } as Response;
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<DraftComposer mailboxId="mailbox" draftId="draft" />);
+    await screen.findByRole("button", { name: "Save draft" });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    expect(await screen.findByText("We could not save this draft. Your last confirmed version is unchanged.", {}, { timeout: 2_000 })).toBeTruthy();
+  });
   it("disables Send for dirty browser edits", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ id: "create", draftId: "draft", status: "succeeded" }) } as Response)
