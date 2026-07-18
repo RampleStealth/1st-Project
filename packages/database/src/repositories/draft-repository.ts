@@ -71,7 +71,10 @@ type SendDraftInput = {
   correlationId?: string;
 };
 
-const draftColumns = `id,mailbox_account_id AS "mailboxAccountId",status,revision,confirmed_revision AS "confirmedRevision",rfc822_message_id AS "rfc822MessageId",content_fingerprint AS "contentFingerprint",confirmed_content_fingerprint AS "confirmedContentFingerprint",encrypted_recipients AS "encryptedRecipients",encrypted_subject AS "encryptedSubject",encrypted_plain_text AS "encryptedPlainText",encrypted_html AS "encryptedHtml",recipient_count AS "recipientCount",body_byte_count AS "bodyByteCount",has_html AS "hasHtml",gmail_draft_id AS "gmailDraftId",gmail_draft_message_id AS "gmailDraftMessageId",gmail_thread_id AS "gmailThreadId",created_at AS "createdAt",updated_at AS "updatedAt"`;
+function draftColumns(alias?: string) {
+  const column = (name: string) => alias ? `${alias}.${name}` : name;
+  return `${column("id")},${column("mailbox_account_id")} AS "mailboxAccountId",${column("status")},${column("revision")},${column("confirmed_revision")} AS "confirmedRevision",${column("rfc822_message_id")} AS "rfc822MessageId",${column("content_fingerprint")} AS "contentFingerprint",${column("confirmed_content_fingerprint")} AS "confirmedContentFingerprint",${column("encrypted_recipients")} AS "encryptedRecipients",${column("encrypted_subject")} AS "encryptedSubject",${column("encrypted_plain_text")} AS "encryptedPlainText",${column("encrypted_html")} AS "encryptedHtml",${column("recipient_count")} AS "recipientCount",${column("body_byte_count")} AS "bodyByteCount",${column("has_html")} AS "hasHtml",${column("gmail_draft_id")} AS "gmailDraftId",${column("gmail_draft_message_id")} AS "gmailDraftMessageId",${column("gmail_thread_id")} AS "gmailThreadId",${column("created_at")} AS "createdAt",${column("updated_at")} AS "updatedAt"`;
+}
 
 /** Creates the local encrypted draft, command, and durable outbox event atomically. */
 export async function createDraftWithCommand(input: CreateDraftInput): Promise<DraftCommand> {
@@ -103,7 +106,7 @@ export async function createDraftWithCommand(input: CreateDraftInput): Promise<D
 }
 
 export async function findDraftForUser(mailboxId: string, draftId: string, userId: string): Promise<StoredDraft | null> {
-  const result = await pool.query<StoredDraft>(`SELECT ${draftColumns} FROM drafts d JOIN mailbox_accounts m ON m.id=d.mailbox_account_id WHERE d.id=$1 AND d.mailbox_account_id=$2 AND m.user_id=$3`, [draftId, mailboxId, userId]);
+  const result = await pool.query<StoredDraft>(`SELECT ${draftColumns("d")} FROM drafts d JOIN mailbox_accounts m ON m.id=d.mailbox_account_id WHERE d.id=$1 AND d.mailbox_account_id=$2 AND m.user_id=$3`, [draftId, mailboxId, userId]);
   return result.rows[0] ?? null;
 }
 
@@ -138,7 +141,7 @@ export async function updateDraftWithCommand(input: UpdateDraftInput): Promise<D
     }
 
     const draft = await client.query<StoredDraft>(
-      `SELECT ${draftColumns} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 FOR UPDATE`,
+      `SELECT ${draftColumns()} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 FOR UPDATE`,
       [input.draftId, input.mailboxId]
     );
     if (!draft.rowCount) throw new DraftStateConflictError();
@@ -193,7 +196,7 @@ export async function sendDraftWithCommand(input: SendDraftInput): Promise<Draft
     }
 
     const draft = await client.query<StoredDraft>(
-      `SELECT ${draftColumns} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 FOR UPDATE`,
+      `SELECT ${draftColumns()} FROM drafts WHERE id=$1 AND mailbox_account_id=$2 FOR UPDATE`,
       [input.draftId, input.mailboxId]
     );
     if (!draft.rowCount) throw new DraftStateConflictError();
@@ -232,7 +235,7 @@ export async function sendDraftWithCommand(input: SendDraftInput): Promise<Draft
 /** Returns encrypted draft content only after the command claim and payload have been verified. */
 export async function loadDraftForCreation(client: PoolClient, commandId: string, mailboxId: string, draftId: string, claimId: string): Promise<StoredDraft> {
   const result = await client.query<StoredDraft>(
-    `SELECT ${draftColumns} FROM drafts
+    `SELECT ${draftColumns()} FROM drafts
      WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3 AND status='creating'
        AND EXISTS (SELECT 1 FROM provider_commands c WHERE c.id=drafts.last_command_id AND c.status='running' AND c.active_claim_id=$4 AND c.lease_expires_at>now())
      FOR UPDATE`,
@@ -245,7 +248,7 @@ export async function loadDraftForCreation(client: PoolClient, commandId: string
 /** Loads the encrypted desired revision only after command claim validation. */
 export async function loadDraftForUpdate(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number, claimId: string): Promise<StoredDraft> {
   const result = await client.query<StoredDraft>(
-    `SELECT ${draftColumns} FROM drafts
+    `SELECT ${draftColumns()} FROM drafts
      WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3
        AND status='updating' AND revision=$4 AND gmail_draft_id IS NOT NULL AND gmail_draft_message_id IS NOT NULL
        AND EXISTS (SELECT 1 FROM provider_commands c WHERE c.id=drafts.last_command_id AND c.status='running' AND c.active_claim_id=$5 AND c.lease_expires_at>now())
@@ -259,7 +262,7 @@ export async function loadDraftForUpdate(client: PoolClient, commandId: string, 
 /** Loads only confirmed provider identity; send never decrypts or rebuilds content. */
 export async function loadDraftForSend(client: PoolClient, commandId: string, mailboxId: string, draftId: string, revision: number, claimId: string): Promise<StoredDraft> {
   const result = await client.query<StoredDraft>(
-    `SELECT ${draftColumns} FROM drafts
+    `SELECT ${draftColumns()} FROM drafts
      WHERE id=$1 AND mailbox_account_id=$2 AND last_command_id=$3 AND status='sending'
        AND revision=$4 AND confirmed_revision=$4 AND content_fingerprint=confirmed_content_fingerprint
        AND gmail_draft_id IS NOT NULL AND gmail_draft_message_id IS NOT NULL
