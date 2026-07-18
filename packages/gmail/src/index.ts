@@ -160,7 +160,30 @@ export async function findSentMessageByRfc822MessageId(gmail: gmail_v1.Gmail, me
   return { kind: "one", message: { messageId: data.id, threadId: data.threadId ?? null, sentAt: Number.isFinite(milliseconds) ? new Date(milliseconds) : null } };
 }
 
-export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required" | "reauthorization_required" | "rate_limited" | "transient_provider_failure" | "uncertain_provider_outcome" | "unknown_provider_failure";
+export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required" | "reauthorization_required" | "rate_limited" | "transient_provider_failure" | "provider_rejected" | "uncertain_provider_outcome" | "unknown_provider_failure";
+
+type GoogleErrorData = {
+  error?: string | { code?: unknown; message?: unknown; status?: unknown; errors?: Array<{ reason?: unknown }> };
+  message?: unknown;
+};
+
+function gmailProviderErrorDetails(error: unknown) {
+  const value = error as { code?: unknown; response?: { status?: unknown; data?: GoogleErrorData }; request?: unknown };
+  const nested = value?.response?.data?.error;
+  const nestedError = nested && typeof nested === "object" ? nested : undefined;
+  const status = typeof value?.code === "number"
+    ? value.code
+    : typeof value?.response?.status === "number"
+      ? value.response.status
+      : typeof nestedError?.code === "number"
+        ? nestedError.code
+        : undefined;
+  const providerError = typeof nested === "string" ? nested : "";
+  const providerStatus = typeof nestedError?.status === "string" ? nestedError.status : "";
+  const providerReason = typeof nestedError?.errors?.[0]?.reason === "string" ? nestedError.errors[0].reason : "";
+  const message = [value?.response?.data?.message, nestedError?.message].filter((item): item is string => typeof item === "string").join(" ");
+  return { status, providerError, providerStatus, providerReason, message, request: value?.request };
+}
 
 /**
  * Mutation failures are stricter than read failures: anything that may have
@@ -169,17 +192,15 @@ export type GmailMutationErrorCode = "resource_deleted" | "write_scope_required"
  */
 export function classifyGmailMutationError(error: unknown): GmailMutationErrorCode {
   if (!error || typeof error !== "object") return "unknown_provider_failure";
-  const value = error as { code?: unknown; response?: { status?: unknown; data?: { error?: unknown; message?: unknown } }; request?: unknown };
-  const status = typeof value.code === "number" ? value.code : typeof value.response?.status === "number" ? value.response.status : undefined;
-  const providerError = typeof value.response?.data?.error === "string" ? value.response.data.error : "";
-  const message = typeof value.response?.data?.message === "string" ? value.response.data.message : "";
-  const scopeFailure = /insufficient.*(scope|permission)|insufficientpermissions/i.test(`${providerError} ${message}`);
+  const { status, providerError, providerStatus, providerReason, message, request } = gmailProviderErrorDetails(error);
+  const scopeFailure = /insufficient.*(scope|permission)|insufficientpermissions/i.test(`${providerError} ${providerStatus} ${providerReason} ${message}`);
   if (status === 401 || providerError === "invalid_grant") return "reauthorization_required";
   if (status === 403 && scopeFailure) return "write_scope_required";
   if (status === 404) return "resource_deleted";
   if (status === 429) return "rate_limited";
   if (status && status >= 500) return "transient_provider_failure";
-  if (value.request) return "uncertain_provider_outcome";
+  if (status && status >= 400) return "provider_rejected";
+  if (request) return "uncertain_provider_outcome";
   return "unknown_provider_failure";
 }
 
@@ -245,7 +266,7 @@ export function classifyGmailError(error: unknown, operation: "history" | "resou
   return "unknown_provider_failure";
 }
 
-type ProviderLogContext = { operation: string; mailboxId?: string; correlationId?: string; jobId?: string };
+type ProviderLogContext = { operation: string; mailboxId?: string; correlationId?: string; jobId?: string; commandId?: string };
 type ProviderErrorShape = { code?: unknown; response?: { status?: unknown; data?: unknown }; config?: unknown; request?: unknown };
 
 function providerStatusCategory(error: unknown): "http_401" | "http_404" | "http_429" | "http_4xx" | "http_5xx" | "network" | "unknown" {
@@ -275,7 +296,32 @@ export function sanitizeGmailProviderError(error: unknown, context: ProviderLogC
     ...(context.mailboxId ? { mailboxId: context.mailboxId } : {}),
     ...(context.correlationId ? { correlationId: context.correlationId } : {}),
     ...(context.jobId ? { jobId: context.jobId } : {}),
+    ...(context.commandId ? { commandId: context.commandId } : {}),
     retryable: applicationErrorCode === "rate_limited" || applicationErrorCode === "transient_provider_failure",
     message: "Gmail provider operation failed"
+  };
+}
+
+function safeProviderCode(value: string): string | null {
+  return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value) ? value : null;
+}
+
+/** Allowlisted mutation diagnostics; provider bodies, headers, URLs, tokens, and resource IDs are never returned. */
+export function sanitizeGmailMutationError(error: unknown, context: ProviderLogContext) {
+  const applicationErrorCode = classifyGmailMutationError(error);
+  const details = gmailProviderErrorDetails(error);
+  return {
+    applicationErrorCode,
+    statusCategory: providerStatusCategory(error),
+    httpStatus: details.status ?? null,
+    googleStatus: safeProviderCode(details.providerStatus),
+    googleReason: safeProviderCode(details.providerReason || details.providerError),
+    operation: context.operation,
+    ...(context.mailboxId ? { mailboxId: context.mailboxId } : {}),
+    ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+    ...(context.jobId ? { jobId: context.jobId } : {}),
+    ...(context.commandId ? { commandId: context.commandId } : {}),
+    retryable: applicationErrorCode === "rate_limited" || applicationErrorCode === "transient_provider_failure",
+    message: "Gmail mutation failed"
   };
 }

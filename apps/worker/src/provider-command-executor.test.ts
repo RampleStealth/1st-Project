@@ -464,12 +464,38 @@ test("worker error handling retries only safe failures and requires recovery for
     assert.equal((await commandState(deleted.id)).failure_code, "resource_deleted");
 
     const scope = await command(data.mailboxId, "archive_thread", "archive-thread");
-    assert.deepEqual(await executeProviderCommand(scope.id, executor({ archiveThread: async () => { throw providerError(403, { message: "insufficient authentication scopes" }); } })), { outcome: "recovery_required" });
-    assert.equal((await commandState(scope.id)).failure_code, "write_scope_required");
+    const loggedContexts: Array<{ commandId: string; correlationId?: string; mailboxId: string; operation: string }> = [];
+    const insufficientPermissions = providerError(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "Request had insufficient authentication scopes.", errors: [{ reason: "insufficientPermissions" }] } });
+    assert.deepEqual(await executeProviderCommand(scope.id, executor({
+      archiveThread: async () => { throw insufficientPermissions; },
+      logGmailMutationFailure: (_error, context) => loggedContexts.push(context)
+    })), { outcome: "failed" });
+    const scopeState = await commandState(scope.id);
+    assert.equal(scopeState.status, "failed");
+    assert.equal(scopeState.failure_code, "write_scope_required");
+    assert.equal(loggedContexts.length, 1);
+    assert.equal(loggedContexts[0].commandId, scope.id);
+    assert.equal(loggedContexts[0].mailboxId, data.mailboxId);
+    assert.equal(loggedContexts[0].operation, "gmail.threads.modify.archive");
+    assert.match(loggedContexts[0].correlationId ?? "", /^[0-9a-f-]{36}$/i);
 
     const revoked = await command(data.mailboxId, "archive_thread", "archive-thread");
-    assert.deepEqual(await executeProviderCommand(revoked.id, executor({ archiveThread: async () => { throw providerError(401); } })), { outcome: "recovery_required" });
-    assert.equal((await commandState(revoked.id)).failure_code, "reauthorization_required");
+    assert.deepEqual(await executeProviderCommand(revoked.id, executor({ archiveThread: async () => { throw providerError(401); } })), { outcome: "failed" });
+    const revokedState = await commandState(revoked.id);
+    assert.equal(revokedState.status, "failed");
+    assert.equal(revokedState.failure_code, "reauthorization_required");
+
+    const rejected = await command(data.mailboxId, "archive_thread", "archive-thread");
+    assert.deepEqual(await executeProviderCommand(rejected.id, executor({ archiveThread: async () => { throw providerError(400, { error: { code: 400, status: "INVALID_ARGUMENT" } }); } })), { outcome: "failed" });
+    const rejectedState = await commandState(rejected.id);
+    assert.equal(rejectedState.status, "failed");
+    assert.equal(rejectedState.failure_code, "provider_rejected");
+
+    const preProviderInternal = await command(data.mailboxId, "archive_thread", "archive-thread");
+    assert.deepEqual(await executeProviderCommand(preProviderInternal.id, executor({ gmailForMailbox: () => { throw new Error("credential setup failed"); } })), { outcome: "failed" });
+    const preProviderInternalState = await commandState(preProviderInternal.id);
+    assert.equal(preProviderInternalState.status, "failed");
+    assert.equal(preProviderInternalState.failure_code, "unknown_provider_failure");
 
     const uncertain = await command(data.mailboxId, "archive_thread", "archive-thread");
     assert.deepEqual(await executeProviderCommand(uncertain.id, executor({ archiveThread: async () => { throw { request: { headers: { authorization: "Bearer secret" } } }; } })), { outcome: "recovery_required" });

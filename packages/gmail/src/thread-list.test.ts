@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailProviderError, sendDraft, threadListLabel, updateDraft } from "./index.js";
+import { archiveThread, classifyGmailMutationError, createDraft, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, GmailPaginationValidationError, listThreads, mapWithConcurrency, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, sendDraft, threadListLabel, updateDraft } from "./index.js";
 
 test("maps workspace views to Gmail system labels", () => {
   assert.equal(threadListLabel("inbox"), "INBOX");
@@ -53,7 +53,39 @@ test("mutation error classification is safe for retries, permissions, and uncert
   assert.equal(classifyGmailMutationError({ response: { status: 503, data: {} } }), "transient_provider_failure");
   assert.equal(classifyGmailMutationError({ response: { status: 401, data: {} } }), "reauthorization_required");
   assert.equal(classifyGmailMutationError({ response: { status: 403, data: { message: "Request had insufficient authentication scopes." } } }), "write_scope_required");
+  assert.equal(classifyGmailMutationError({ response: { status: 403, data: { error: { code: 403, status: "PERMISSION_DENIED", message: "Request had insufficient authentication scopes.", errors: [{ reason: "insufficientPermissions" }] } } } }), "write_scope_required");
+  assert.equal(classifyGmailMutationError({ response: { status: 400, data: { error: { code: 400, status: "INVALID_ARGUMENT" } } } }), "provider_rejected");
   assert.equal(classifyGmailMutationError({ request: { socket: {} } }), "uncertain_provider_outcome");
+});
+
+test("mutation diagnostics retain only safe status and Google reason fields", () => {
+  const secrets = ["Bearer access-token", "person@example.test", "gmail-thread-id", "raw-response-body"];
+  const error = {
+    response: {
+      status: 403,
+      data: {
+        error: { code: 403, status: "PERMISSION_DENIED", message: secrets[3], errors: [{ reason: "insufficientPermissions" }] },
+        email: secrets[1], threadId: secrets[2]
+      }
+    },
+    config: { headers: { authorization: secrets[0] } }
+  };
+  const metadata = sanitizeGmailMutationError(error, { operation: "gmail.threads.modify.mark_unread", mailboxId: "mailbox-id", commandId: "command-id", correlationId: "correlation-id" });
+  assert.deepEqual(metadata, {
+    applicationErrorCode: "write_scope_required",
+    statusCategory: "http_4xx",
+    httpStatus: 403,
+    googleStatus: "PERMISSION_DENIED",
+    googleReason: "insufficientPermissions",
+    operation: "gmail.threads.modify.mark_unread",
+    mailboxId: "mailbox-id",
+    correlationId: "correlation-id",
+    commandId: "command-id",
+    retryable: false,
+    message: "Gmail mutation failed"
+  });
+  const serialized = JSON.stringify(metadata);
+  for (const secret of secrets) assert.equal(serialized.includes(secret), false);
 });
 
 test("draft adapter creates and reads only normalized Gmail draft references", async () => {

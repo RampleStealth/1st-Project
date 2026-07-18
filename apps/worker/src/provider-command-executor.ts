@@ -12,7 +12,7 @@ import { decryptDraftContent } from "@aio/security";
 
 type SupportedThreadCommand = Extract<ProviderCommandType, "archive_thread" | "mark_thread_unread">;
 type SupportedCommand = SupportedThreadCommand | "create_draft" | "update_draft" | "send_draft";
-type CommandClaim = { claimId: string; command: { mailboxAccountId: string; commandType: ProviderCommandType } };
+type CommandClaim = { claimId: string; command: { mailboxAccountId: string; commandType: ProviderCommandType; correlationId?: string } };
 type LoadedCommand = LoadedClaimedCommand;
 
 export class MissingThreadProjectionError extends Error {
@@ -51,8 +51,17 @@ export type ProviderCommandExecutorDependencies = {
   scheduleRetryFromClaim: (client: PoolClient, commandId: string, claimId: string, failureCode: string) => Promise<{ status: "failed" | "retryable"; delay: number }>;
   completeClaim: (commandId: string, claimId: string, status: "failed" | "recovery_required", failureCode?: string) => Promise<boolean>;
   classifyGmailMutationError: (error: unknown) => GmailMutationErrorCode;
+  logGmailMutationFailure?: (error: unknown, context: { commandId: string; correlationId?: string; mailboxId: string; operation: string }) => void;
   isStaleCommandClaimError: (error: unknown) => boolean;
 };
+
+function gmailMutationOperation(commandType: ProviderCommandType) {
+  if (commandType === "archive_thread") return "gmail.threads.modify.archive";
+  if (commandType === "mark_thread_unread") return "gmail.threads.modify.mark_unread";
+  if (commandType === "create_draft") return "gmail.drafts.create";
+  if (commandType === "update_draft") return "gmail.drafts.update";
+  return "gmail.drafts.send";
+}
 
 function isSupportedCommand(commandType: ProviderCommandType): commandType is SupportedCommand {
   return commandType === "archive_thread" || commandType === "mark_thread_unread" || commandType === "create_draft" || commandType === "update_draft" || commandType === "send_draft";
@@ -82,6 +91,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
   const claim = await dependencies.claimCommand(commandId);
   if (!claim) return { outcome: "not_claimed" as const };
   let providerExecutionStarted = false;
+  let threadProviderConfirmed = false;
   let sendDraftId: string | null = null;
 
   // Reject unsupported future command types before decrypting their payload.
@@ -203,6 +213,7 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
     const providerThreadId = loaded.payload.providerThreadId;
     if (commandType === "archive_thread") await dependencies.archiveThread(gmail, providerThreadId);
     else await dependencies.markThreadUnread(gmail, providerThreadId);
+    threadProviderConfirmed = true;
 
     await dependencies.withTransaction((client) =>
       dependencies.completeConfirmedMutation(
@@ -222,6 +233,12 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
         : { outcome: "stale" as const };
     }
     const code = dependencies.classifyGmailMutationError(error);
+    dependencies.logGmailMutationFailure?.(error, {
+      commandId,
+      correlationId: claim.command.correlationId,
+      mailboxId: claim.command.mailboxAccountId,
+      operation: gmailMutationOperation(claim.command.commandType)
+    });
     // Draft create/update/send calls may have reached Gmail once their durable execution marker exists. Never retry that uncertainty automatically.
     if (providerExecutionStarted) {
       if (claim.command.commandType === "send_draft") {
@@ -234,6 +251,11 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
         }
       }
       return (await dependencies.completeClaim(commandId, claim.claimId, "recovery_required", code))
+        ? { outcome: "recovery_required" as const }
+        : { outcome: "stale" as const };
+    }
+    if (threadProviderConfirmed) {
+      return (await dependencies.completeClaim(commandId, claim.claimId, "recovery_required", "projection_persistence_failed"))
         ? { outcome: "recovery_required" as const }
         : { outcome: "stale" as const };
     }
@@ -251,6 +273,11 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
         ? { outcome: "failed" as const }
         : { outcome: "stale" as const };
     }
+    if (code === "write_scope_required" || code === "reauthorization_required" || code === "provider_rejected") {
+      return (await dependencies.completeClaim(commandId, claim.claimId, "failed", code))
+        ? { outcome: "failed" as const }
+        : { outcome: "stale" as const };
+    }
     if (claim.command.commandType === "send_draft" && sendDraftId) {
       await dependencies.withTransaction((client) => dependencies.completeRecoveryRequiredMutation(
         client, commandId, claim.claimId, code,
@@ -258,8 +285,9 @@ export async function executeProviderCommand(commandId: string, dependencies: Pr
       ));
       return { outcome: "recovery_required" as const };
     }
-    return (await dependencies.completeClaim(commandId, claim.claimId, "recovery_required", code))
-      ? { outcome: "recovery_required" as const }
+    const terminalStatus = code === "uncertain_provider_outcome" ? "recovery_required" : "failed";
+    return (await dependencies.completeClaim(commandId, claim.claimId, terminalStatus, code))
+      ? { outcome: terminalStatus as "failed" | "recovery_required" }
       : { outcome: "stale" as const };
   }
 }

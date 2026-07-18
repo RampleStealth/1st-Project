@@ -18,6 +18,18 @@ type Deps = {
   enqueueSync: (job: SyncJob) => Promise<unknown>;
 };
 
+/** A read-only reconnect replaces the active credential, so any prior write grant must be revoked atomically. */
+export async function resetWritePermissionAfterReadOnlyConnection(client: PoolClient, mailboxId: string, grantedScopes: string[]) {
+  await client.query(
+    `INSERT INTO mailbox_permission_state(mailbox_account_id,write_capability,granted_scopes,updated_at)
+     VALUES($1,'read_only',$2,now())
+     ON CONFLICT(mailbox_account_id) DO UPDATE
+       SET write_capability='read_only',granted_scopes=EXCLUDED.granted_scopes,
+           upgrade_attempt_id=NULL,upgrade_expires_at=NULL,updated_at=now()`,
+    [mailboxId, grantedScopes]
+  );
+}
+
 export function registerGoogleAuthRoutes(
   app: FastifyInstance<any, any, any, any>,
   { config, pool, redis, withTransaction, ensureMailboxSyncState, enqueueSync }: Deps
@@ -51,6 +63,7 @@ export function registerGoogleAuthRoutes(
            RETURNING id, encrypted_refresh_token`,
           [user.rows[0].id, email, email, encryptSecret(refreshToken, config.TOKEN_ENCRYPTION_KEY_BASE64), tokens.scope?.split(" ") ?? []]
         );
+        await resetWritePermissionAfterReadOnlyConnection(client, account.rows[0].id, tokens.scope?.split(" ") ?? []);
         // OAuth authentication always receives a newly generated session identity. Revoking prior
         // sessions for this principal avoids preserving a pre-authentication session fixation token.
         await revokeAllSessionsForUser(client, user.rows[0].id);

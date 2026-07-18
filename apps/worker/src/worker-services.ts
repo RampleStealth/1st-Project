@@ -3,7 +3,7 @@ import { findMailboxById, pool, withTransaction, type MailboxAccount } from "@ai
 import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
 import { getWorkerDatabaseDiagnostics, markWorkerDraining, markWorkerStopped, recordWorkerHeartbeat, recordWorkerStarted, repairInconsistentDraftStates } from "@aio/database/repositories/worker-runtime";
-import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailProviderError, sendDraft, updateDraft, watchMailbox } from "@aio/gmail";
+import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, sendDraft, updateDraft, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueProviderCommand, enqueueSync, gmailCommandsQueue, syncQueue } from "@aio/jobs";
 import { logger, metrics } from "@aio/observability";
 import type { SyncErrorCode, SyncJob } from "@aio/contracts";
@@ -44,7 +44,11 @@ export function createWorkerServices(config: AppConfig): WorkerRuntimeServices {
     loadDraftForCreation, createDraft, confirmDraftCreation, loadDraftForUpdate, getDraft, updateDraft, confirmDraftUpdate, markDraftConflict,
     loadDraftForSend, sendDraft, confirmDraftSent, markDraftSendConflict, markDraftSendRecoveryRequired, markProviderExecutionStarted,
     withTransaction, completeConfirmedMutation, completeFailedMutation, completeRecoveryRequiredMutation, scheduleRetryFromClaim, completeClaim,
-    classifyGmailMutationError, isStaleCommandClaimError: (error: unknown) => error instanceof StaleCommandClaimError
+    classifyGmailMutationError,
+    logGmailMutationFailure: (error: unknown, context: { commandId: string; correlationId?: string; mailboxId: string; operation: string }) => {
+      if (isGmailProviderError(error)) logger.warn(sanitizeGmailMutationError(error, context), "Gmail provider command failed");
+    },
+    isStaleCommandClaimError: (error: unknown) => error instanceof StaleCommandClaimError
   };
   const fetchThreads = (gmail: ReturnType<typeof gmailForMailbox>, ids: string[]) => hydrateThreadMetadata(gmail, ids, 5);
   const collectHistoryChanges = async (gmail: ReturnType<typeof gmailForMailbox>, startHistoryId: string): Promise<HistoryBatch> => {
