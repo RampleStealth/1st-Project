@@ -11,7 +11,7 @@ import { authenticatedUser } from "../route-helpers/session.js";
 
 type CreatedDraftCommand = { id: string; commandType: string; status: string; draftId: string };
 type StoredDraft = Parameters<typeof decryptDraftContent>[0] & {
-  id: string; status: string; revision: number; confirmedRevision: number | null; contentFingerprint: string; confirmedContentFingerprint: string | null; recipientCount: number; hasHtml: boolean; createdAt: Date; updatedAt: Date;
+  id: string; status: string; revision: number; confirmedRevision: number | null; contentFingerprint: string; confirmedContentFingerprint: string | null; recipientCount: number; hasHtml: boolean; gmailThreadId: string | null; createdAt: Date; updatedAt: Date;
 };
 type Deps = {
   config: AppConfig;
@@ -27,6 +27,7 @@ type Deps = {
   }) => Promise<CreatedDraftCommand>;
   sendDraftWithCommand: (input: { draftId: string; mailboxId: string; expectedRevision: number; encryptedCommandPayload: string; requestFingerprint: string; idempotencyKey: string; correlationId?: string }) => Promise<CreatedDraftCommand>;
   findDraftForUser: (mailboxId: string, draftId: string, userId: string) => Promise<StoredDraft | null>;
+  findDraftEditEligibilityForUser: (mailboxId: string, providerThreadId: string, userId: string) => Promise<{ draftId: string; writeGranted: boolean } | null>;
   findSendRecoveryCommandForUser: (mailboxId: string, draftId: string, userId: string) => Promise<{ id: string; status: string } | null>;
   enqueueSendDraftVerification: (commandId: string) => Promise<unknown>;
   isIdempotencyConflictError: (error: unknown) => boolean;
@@ -51,7 +52,7 @@ function hasRequestBody(value: unknown) {
 }
 
 export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, deps: Deps) {
-  const { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findSendRecoveryCommandForUser, enqueueSendDraftVerification, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError } = deps;
+  const { config, pool, findMailboxForUser, createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findDraftEditEligibilityForUser, findSendRecoveryCommandForUser, enqueueSendDraftVerification, isIdempotencyConflictError, isDraftRevisionConflictError, isDraftStateConflictError, isActiveDraftCommandError } = deps;
   app.post<{ Params: { mailboxId: string }; Body: DraftContentInput }>("/v1/mailboxes/:mailboxId/drafts", async (request, reply) => {
     const user = await authenticatedUser(request, pool);
     if (!user) return reply.code(401).send({ code: "unauthenticated" });
@@ -108,13 +109,25 @@ export function registerDraftRoutes(app: FastifyInstance<any, any, any, any>, de
     if (!draft) return reply.code(404).send({ code: "draft_not_found" });
     try {
       const content = decryptDraftContent(draft, config.TOKEN_ENCRYPTION_KEY_BASE64);
+      const editability = draft.gmailThreadId ? await findDraftEditEligibilityForUser(request.params.mailboxId, draft.gmailThreadId, user.id) : null;
+      const editable = editability?.draftId === draft.id;
       // This boolean permits only the already-existing, read-only send verification
       // action after a reload; it does not reveal command identity or provider data.
       const canVerifySend = draft.status === "recovery_required" && Boolean(await findSendRecoveryCommandForUser(request.params.mailboxId, request.params.draftId, user.id));
-      return { id: draft.id, status: draft.status, revision: draft.revision, confirmedRevision: draft.confirmedRevision, recipientCount: draft.recipientCount, hasHtml: draft.hasHtml, canVerifySend, createdAt: draft.createdAt, updatedAt: draft.updatedAt, ...content };
+      return { id: draft.id, status: draft.status, revision: draft.revision, confirmedRevision: draft.confirmedRevision, recipientCount: draft.recipientCount, hasHtml: draft.hasHtml, editable, writeGranted: editable ? editability.writeGranted : false, canVerifySend, createdAt: draft.createdAt, updatedAt: draft.updatedAt, ...content };
     } catch {
       return reply.code(422).send({ code: "draft_unavailable" });
     }
+  });
+
+  app.get<{ Params: { mailboxId: string; threadId: string } }>("/v1/mailboxes/:mailboxId/threads/:threadId/draft-edit-eligibility", async (request, reply) => {
+    const user = await authenticatedUser(request, pool);
+    if (!user) return reply.code(401).send({ code: "unauthenticated" });
+    const mailbox = await findMailboxForUser(request.params.mailboxId, user.id);
+    if (!mailbox) return reply.code(404).send({ code: "mailbox_not_found" });
+    const eligibility = await findDraftEditEligibilityForUser(mailbox.id, request.params.threadId, user.id);
+    if (!eligibility) return { editable: false };
+    return { editable: true, draftId: eligibility.draftId, writeGranted: eligibility.writeGranted };
   });
 
   app.put<{ Params: { mailboxId: string; draftId: string }; Body: DraftContentInput }>("/v1/mailboxes/:mailboxId/drafts/:draftId", async (request, reply) => {

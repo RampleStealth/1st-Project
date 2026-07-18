@@ -78,6 +78,7 @@ async function makeApp(options: { permission?: string; threads?: Set<string>; ma
     updateDraftWithCommand: async () => ({ id: "draft-command", commandType: "update_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
     sendDraftWithCommand: async () => ({ id: "draft-command", commandType: "send_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
     findDraftForUser: async () => null,
+    findDraftEditEligibilityForUser: async () => null,
     findSendRecoveryCommandForUser: async () => null,
     enqueueSendDraftVerification: async () => undefined,
     isIdempotencyConflictError: (error) => error instanceof Error && error.message === "idempotency conflict",

@@ -18,6 +18,7 @@ export type ProductionDependencyFactories = {
   updateDraftWithCommand: ApiAppDependencies["updateDraftWithCommand"];
   sendDraftWithCommand: ApiAppDependencies["sendDraftWithCommand"];
   findDraftForUser: ApiAppDependencies["findDraftForUser"];
+  findDraftEditEligibilityForUser: ApiAppDependencies["findDraftEditEligibilityForUser"];
   findSendRecoveryCommandForUser: ApiAppDependencies["findSendRecoveryCommandForUser"];
   enqueueSendDraftVerification: ApiAppDependencies["enqueueSendDraftVerification"];
   isIdempotencyConflictError: ApiAppDependencies["isIdempotencyConflictError"];
@@ -37,7 +38,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     { findMailboxForUser },
     { ensureMailboxSyncState, recordPendingHistory },
     { insertProviderCommand, IdempotencyConflictError },
-    { createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findSendRecoveryCommandForUser, DraftRevisionConflictError, DraftStateConflictError, ActiveDraftCommandError },
+    { createDraftWithCommand, updateDraftWithCommand, sendDraftWithCommand, findDraftForUser, findDraftEditEligibilityForUser, findSendRecoveryCommandForUser, DraftRevisionConflictError, DraftStateConflictError, ActiveDraftCommandError },
     { SanitizedThreadCache },
     { enqueueSync, enqueueSendDraftVerification },
     { logger },
@@ -72,6 +73,7 @@ async function loadProductionDependencyFactories(): Promise<ProductionDependency
     updateDraftWithCommand,
     sendDraftWithCommand,
     findDraftForUser,
+    findDraftEditEligibilityForUser,
     findSendRecoveryCommandForUser,
     enqueueSendDraftVerification,
     isIdempotencyConflictError: (error) => error instanceof IdempotencyConflictError,
@@ -106,6 +108,7 @@ export async function createProductionApiDependencies(config: AppConfig, loadFac
       updateDraftWithCommand: factories.updateDraftWithCommand,
       sendDraftWithCommand: factories.sendDraftWithCommand,
       findDraftForUser: factories.findDraftForUser,
+      findDraftEditEligibilityForUser: factories.findDraftEditEligibilityForUser,
       findSendRecoveryCommandForUser: factories.findSendRecoveryCommandForUser,
       enqueueSendDraftVerification: factories.enqueueSendDraftVerification,
       isIdempotencyConflictError: factories.isIdempotencyConflictError,

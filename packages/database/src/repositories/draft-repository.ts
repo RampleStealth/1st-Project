@@ -110,6 +110,42 @@ export async function findDraftForUser(mailboxId: string, draftId: string, userI
   return result.rows[0] ?? null;
 }
 
+export type DraftEditEligibility = {
+  draftId: string;
+  writeGranted: boolean;
+};
+
+/**
+ * Resolves a provider thread to one editable application draft without reading
+ * encrypted content. Ambiguous thread mappings are deliberately non-editable.
+ */
+export async function findDraftEditEligibilityForUser(mailboxId: string, providerThreadId: string, userId: string): Promise<DraftEditEligibility | null> {
+  const result = await pool.query<DraftEditEligibility>(
+    `WITH candidates AS (
+       SELECT d.id,d.status,d.revision,d.confirmed_revision,d.content_fingerprint,d.confirmed_content_fingerprint,
+              d.gmail_draft_id,d.gmail_draft_message_id
+       FROM drafts d
+       JOIN mailbox_accounts m ON m.id=d.mailbox_account_id
+       WHERE d.mailbox_account_id=$1 AND d.gmail_thread_id=$2 AND m.user_id=$3
+     )
+     SELECT c.id::text AS "draftId",
+            COALESCE((SELECT p.write_capability='write_granted' FROM mailbox_permission_state p WHERE p.mailbox_account_id=$1),false) AS "writeGranted"
+     FROM candidates c
+     WHERE (SELECT count(*) FROM candidates)=1
+       AND c.status='ready'
+       AND c.revision=c.confirmed_revision
+       AND c.content_fingerprint=c.confirmed_content_fingerprint
+       AND c.gmail_draft_id IS NOT NULL
+       AND c.gmail_draft_message_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM provider_commands command
+         WHERE command.draft_id=c.id AND command.status IN ('pending','running','retryable','recovery_required')
+       )`,
+    [mailboxId, providerThreadId, userId]
+  );
+  return result.rows[0]?.draftId ? result.rows[0] : null;
+}
+
 /** Returns only the local command identity needed to enqueue an explicit read-only send verification. */
 export async function findSendRecoveryCommandForUser(mailboxId: string, draftId: string, userId: string): Promise<{ id: string; status: string } | null> {
   const result = await pool.query<{ id: string; status: string }>(

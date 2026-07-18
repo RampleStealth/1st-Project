@@ -58,6 +58,7 @@ function makeApiDependencies(events: string[] = []): ApiAppDependencies {
     updateDraftWithCommand: async () => ({ id: "draft-command", commandType: "update_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
     sendDraftWithCommand: async () => ({ id: "draft-command", commandType: "send_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
     findDraftForUser: async () => null,
+    findDraftEditEligibilityForUser: async () => null,
     findSendRecoveryCommandForUser: async () => null,
     enqueueSendDraftVerification: async () => undefined,
     isIdempotencyConflictError: () => false,
@@ -84,6 +85,7 @@ function makeFactories(events: string[], dependencies: ApiAppDependencies): Prod
     updateDraftWithCommand: dependencies.updateDraftWithCommand,
     sendDraftWithCommand: dependencies.sendDraftWithCommand,
     findDraftForUser: dependencies.findDraftForUser,
+    findDraftEditEligibilityForUser: dependencies.findDraftEditEligibilityForUser,
     findSendRecoveryCommandForUser: dependencies.findSendRecoveryCommandForUser,
     enqueueSendDraftVerification: dependencies.enqueueSendDraftVerification,
     isIdempotencyConflictError: dependencies.isIdempotencyConflictError,
@@ -121,6 +123,7 @@ test("application factory imports without startup side effects and registers the
     ["GET", "/v1/mailboxes/:mailboxId/threads/:threadId"],
     ["POST", "/v1/mailboxes/:mailboxId/drafts"],
     ["GET", "/v1/mailboxes/:mailboxId/drafts/:draftId"],
+    ["GET", "/v1/mailboxes/:mailboxId/threads/:threadId/draft-edit-eligibility"],
     ["PUT", "/v1/mailboxes/:mailboxId/drafts/:draftId"],
     ["DELETE", "/v1/mailboxes/:mailboxId"],
     ["GET", "/v1/mailboxes/:mailboxId/provider-commands/:commandId"]

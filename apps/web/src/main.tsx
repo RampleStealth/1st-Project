@@ -5,6 +5,7 @@ import { connectionHealth, type MailboxSummary } from "./mailbox-health.js";
 import { ThreadList } from "./thread-list.js";
 import { ThreadReader } from "./thread-reader.js";
 import { DraftComposer } from "./draft-composer.js";
+import { localDraftEditPath } from "./draft-navigation.js";
 import { focusFirstThreadRow, focusThreadRow } from "./workspace-focus.js";
 import "./styles.css";
 
@@ -44,9 +45,9 @@ function Sidebar({ mailbox, selectedView }: { mailbox: MailboxSummary; selectedV
 }
 
 export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
-  const { view = "inbox", threadId } = useParams();
+  const { view = "inbox", threadId, draftId } = useParams();
   const navigate = useNavigate();
-  const selectedView = views.some(([key]) => key === view) ? view : "inbox";
+  const selectedView = draftId ? "drafts" : views.some(([key]) => key === view) ? view : "inbox";
   const lastSelectedThreadId = useRef<string | null>(null);
   useEffect(() => { if (threadId) lastSelectedThreadId.current = threadId; }, [threadId]);
   const closeReader = useCallback((afterArchive = false) => {
@@ -59,11 +60,12 @@ export function Workspace({ mailbox }: { mailbox: MailboxSummary }) {
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
       if (event.key.toLowerCase() === "c" && selectedView === "drafts" && !threadId) { event.preventDefault(); document.querySelector<HTMLButtonElement>("[data-new-draft]")?.click(); }
-      if (event.key === "Escape" && threadId) { event.preventDefault(); closeReader(); }
+      if (event.key === "Escape" && (threadId || draftId)) { event.preventDefault(); closeReader(); }
     };
     window.addEventListener("keydown", onKeyDown); return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeReader, mailbox.id, selectedView, threadId]);
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId ? " mail-layout--reader-open" : ""}`}><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={() => window.dispatchEvent(new Event("aio:request-write-permission"))} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} />}</aside></div></main></div>;
+  }, [closeReader, draftId, mailbox.id, selectedView, threadId]);
+  const requestWritePermission = () => window.dispatchEvent(new Event("aio:request-write-permission"));
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column"><ThreadList mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} /></section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : selectedView === "drafts" && !threadId ? <DraftComposer mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader mailboxId={mailbox.id} threadId={threadId} view={selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
 }
 
 function App() {
@@ -87,7 +89,7 @@ function App() {
   if (state === "loading") return <main className="center-state" aria-live="polite"><div className="loading-mark" aria-hidden="true" /><h1>Loading your workspace</h1><p>Checking your Gmail connection.</p></main>;
   if (state === "error") return <main className="center-state"><div><p className="eyebrow">Connection problem</p><h1>We could not load your mailbox</h1><p>Check your connection and try again.</p><button className="button" type="button" onClick={() => void load()}>Try again</button></div></main>;
   if (state === "disconnected" || !mailbox) return <main className="center-state"><div><p className="eyebrow">Gmail connection</p><h1>Connect Gmail to start</h1><p>Your mailbox workspace appears here after you connect a Gmail account.</p><ConnectMailbox /></div></main>;
-  return <Routes><Route path="/mail/:mailboxId/:view" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view/:threadId" element={<Workspace mailbox={mailbox} />} /><Route path="*" element={<Navigate to={`/mail/${mailbox.id}/inbox`} replace />} /></Routes>;
+  return <Routes><Route path="/mail/:mailboxId/drafts/local/:draftId" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view" element={<Workspace mailbox={mailbox} />} /><Route path="/mail/:mailboxId/:view/:threadId" element={<Workspace mailbox={mailbox} />} /><Route path="*" element={<Navigate to={`/mail/${mailbox.id}/inbox`} replace />} /></Routes>;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><BrowserRouter><App /></BrowserRouter></StrictMode>);

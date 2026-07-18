@@ -26,7 +26,7 @@ function dependencies(options: { config?: AppConfig; rateLimiter?: RateLimiter; 
     pubsubVerifier: {} as never, sanitizedThreadCache: { key: () => "", get: () => undefined, set: () => undefined } as never,
     withTransaction: async (fn) => fn(client), findMailboxForUser: async () => null, ensureMailboxSyncState: async () => undefined, recordPendingHistory: async () => undefined, enqueueSync: async () => undefined,
     insertProviderCommand: async () => ({ id: "command", commandType: "archive_thread", status: "pending" }), createDraftWithCommand: async () => ({ id: "command", commandType: "create_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }), updateDraftWithCommand: async () => ({ id: "command", commandType: "update_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }), sendDraftWithCommand: async () => ({ id: "command", commandType: "send_draft", status: "pending", draftId: "00000000-0000-4000-8000-000000000001" }),
-    findDraftForUser: async () => null, findSendRecoveryCommandForUser: async () => null, enqueueSendDraftVerification: async () => undefined,
+    findDraftForUser: async () => null, findDraftEditEligibilityForUser: async () => null, findSendRecoveryCommandForUser: async () => null, enqueueSendDraftVerification: async () => undefined,
     isIdempotencyConflictError: () => false, isDraftRevisionConflictError: () => false, isDraftStateConflictError: () => false, isActiveDraftCommandError: () => false,
     rateLimiter: options.rateLimiter
   };

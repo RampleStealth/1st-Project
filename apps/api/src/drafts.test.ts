@@ -17,7 +17,7 @@ const input = { to: ["recipient@example.test"], cc: [], bcc: [], subject: "Subje
 function hash(value: string) { return createHash("sha256").update(value).digest("hex"); }
 function mailbox(userId = ownerId): MailboxAccount { return { id: mailboxId, user_id: userId, provider_account_id: "account", email_address: "owner@example.test", status: "active", encrypted_refresh_token: "encrypted", granted_scopes: [], last_history_id: null, watch_expires_at: null, last_sync_error: null }; }
 
-async function makeApp(options: { permission?: string; draft?: any; recoveryCommand?: { id: string; status: string } | null; config?: AppConfig } = {}) {
+async function makeApp(options: { permission?: string; draft?: any; eligibility?: { draftId: string; writeGranted: boolean } | null; recoveryCommand?: { id: string; status: string } | null; config?: AppConfig } = {}) {
   const sessions = new Map([[hash("owner"), ownerId], [hash("other"), otherId]]);
   const captured: any[] = []; const existing = new Map<string, any>(); let storedDraft = options.draft ?? null;
   const client = { query: async (text: string, values: unknown[] = []) => {
@@ -34,6 +34,7 @@ async function makeApp(options: { permission?: string; draft?: any; recoveryComm
     updateDraftWithCommand: async (value: any) => { captured.push(value); const replay = existing.get(value.idempotencyKey); if (replay) { if (replay.requestFingerprint !== value.requestFingerprint) throw new Error("idempotency conflict"); return replay; } if (!storedDraft || storedDraft.status !== "ready") throw new Error("draft state conflict"); if (storedDraft.revision !== value.expectedRevision) throw new Error("draft revision conflict"); const command = { id: `update-${value.idempotencyKey}`, commandType: "update_draft", status: "pending", draftId: value.draftId, requestFingerprint: value.requestFingerprint }; existing.set(value.idempotencyKey, command); storedDraft = { ...storedDraft, status: "updating", revision: storedDraft.revision + 1, recipientCount: value.recipientCount, hasHtml: value.hasHtml, encryptedRecipients: value.encryptedRecipients, encryptedSubject: value.encryptedSubject, encryptedPlainText: value.encryptedPlainText, encryptedHtml: value.encryptedHtml }; return command; },
     sendDraftWithCommand: async (value: any) => { captured.push(value); const replay = existing.get(value.idempotencyKey); if (replay) { if (replay.requestFingerprint !== value.requestFingerprint) throw new Error("idempotency conflict"); return replay; } if (!storedDraft || storedDraft.status !== "ready" || storedDraft.revision !== value.expectedRevision) throw new Error("draft state conflict"); const command = { id: `send-${value.idempotencyKey}`, commandType: "send_draft", status: "pending", draftId: value.draftId, requestFingerprint: value.requestFingerprint }; existing.set(value.idempotencyKey, command); storedDraft = { ...storedDraft, status: "sending" }; return command; },
     findDraftForUser: async (id, draftId, userId) => id === mailboxId && userId === ownerId && storedDraft?.id === draftId ? storedDraft : null,
+    findDraftEditEligibilityForUser: async (id, threadId, userId) => id === mailboxId && threadId === "provider-thread" && userId === ownerId ? options.eligibility ?? null : null,
     findSendRecoveryCommandForUser: async (id, draftId, userId) => id === mailboxId && userId === ownerId && storedDraft?.id === draftId ? options.recoveryCommand ?? null : null,
     enqueueSendDraftVerification: async () => undefined,
     isIdempotencyConflictError: (error) => error instanceof Error && error.message === "idempotency conflict",
@@ -96,6 +97,23 @@ test("draft reads are owner-scoped, decrypt after ownership, and expose no stora
   assert.equal(read.json().canVerifySend, false);
   for (const internal of ["encrypted", "fingerprint", "gmailDraftId", "lastCommandId"]) assert.equal(JSON.stringify(read.json()).includes(internal), false);
   await fixture.app.close();
+});
+
+test("draft edit eligibility is owner-scoped and returns only normalized edit capability", async () => {
+  const draftId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const fixture = await makeApp({ eligibility: { draftId, writeGranted: true } });
+  const url = `/v1/mailboxes/${mailboxId}/threads/provider-thread/draft-edit-eligibility`;
+  assert.equal((await fixture.app.inject({ method: "GET", url })).statusCode, 401);
+  assert.deepEqual((await fixture.app.inject({ method: "GET", url, headers: { cookie: `aio_session=${fixture.other}` } })).json(), { code: "mailbox_not_found" });
+  const response = await fixture.app.inject({ method: "GET", url, headers: { cookie: fixture.headers().cookie } });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { editable: true, draftId, writeGranted: true });
+  assert.deepEqual(Object.keys(response.json()).sort(), ["draftId", "editable", "writeGranted"]);
+  await fixture.app.close();
+
+  const unavailable = await makeApp();
+  assert.deepEqual((await unavailable.app.inject({ method: "GET", url, headers: { cookie: unavailable.headers().cookie } })).json(), { editable: false });
+  await unavailable.app.close();
 });
 
 test("recovered send drafts expose only a safe verification capability", async () => {
