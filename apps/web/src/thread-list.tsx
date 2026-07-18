@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { decodeDisplayEntities } from "./display-text.js";
 
@@ -10,13 +10,23 @@ function formatDate(value: string | null) {
   return value ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value)) : "";
 }
 
-export function ThreadRow({ thread, selected, onSelect }: { thread: ThreadItem; selected: boolean; onSelect: () => void }) {
+function moveThreadRowFocus(event: KeyboardEvent<HTMLButtonElement>) {
+  if (!(["ArrowDown", "ArrowUp", "Home", "End"] as const).includes(event.key as "ArrowDown" | "ArrowUp" | "Home" | "End")) return;
+  const rows = Array.from(event.currentTarget.closest("[data-thread-list-rows]")?.querySelectorAll<HTMLButtonElement>("[data-thread-row]") ?? []);
+  const currentIndex = rows.indexOf(event.currentTarget);
+  if (currentIndex < 0 || rows.length === 0) return;
+  event.preventDefault();
+  const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : event.key === "ArrowDown" ? Math.min(rows.length - 1, currentIndex + 1) : Math.max(0, currentIndex - 1);
+  rows[nextIndex]?.focus();
+}
+
+export function ThreadRow({ thread, selected, onSelect, keyboardNavigation = false }: { thread: ThreadItem; selected: boolean; onSelect: () => void; keyboardNavigation?: boolean }) {
   const unread = thread.unreadCount > 0;
   const sender = decodeDisplayEntities(thread.latestSender) || "Unknown sender";
   const subject = decodeDisplayEntities(thread.subject) || "(No subject)";
   const preview = decodeDisplayEntities(thread.preview) || "No preview available.";
   const className = `thread-row${unread ? " thread-row--unread" : ""}${selected ? " thread-row--selected" : ""}`;
-  return <button id={`thread-row-${thread.providerThreadId}`} data-thread-row type="button" className={className} onClick={onSelect} aria-current={selected ? "true" : undefined} aria-label={`${subject} from ${sender}`}>
+  return <button id={`thread-row-${thread.providerThreadId}`} data-thread-row type="button" className={className} onClick={onSelect} onKeyDown={keyboardNavigation ? moveThreadRowFocus : undefined} aria-current={selected ? "true" : undefined} aria-label={`${subject} from ${sender}`}>
     <span className="thread-row__top"><strong title={sender}>{sender}</strong><time dateTime={thread.lastMessageAt ?? undefined}>{formatDate(thread.lastMessageAt)}</time></span>
     <span className="thread-row__subject"><span title={subject}>{subject}</span>{thread.hasAttachments === true && <span className="thread-row__attachment" aria-label="Has attachment">Attachment</span>}</span>
     <span className="thread-row__preview" title={preview}>{preview}</span>

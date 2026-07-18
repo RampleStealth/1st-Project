@@ -8,7 +8,7 @@ Only drafts created by this application are editable. Gmail-native drafts are re
 
 ## Keyboard and accessibility
 
-Use the visible controls first. `Escape` closes an open reader; `C` opens a new draft only in the Drafts view. Shortcuts do nothing while focus is in an input, textarea, select, or content-editable editor. Use the skip link to reach the workspace. The reader iframe has a descriptive title, strict sandbox, and no remote media access.
+Use the visible controls first. In Search, `/` focuses the query input when focus is not already in an editable control. `Arrow Up`, `Arrow Down`, `Home`, and `End` move focus among current-page Search results; `Enter` or `Space` opens the focused result. `Escape` closes the Search filter disclosure first, returning focus to its trigger, or closes an open reader and returns focus to its originating row. `C` opens a new draft only in the Drafts view. Shortcuts do nothing while focus is in an input, textarea, select, content-editable editor, or dialog. Use the skip link to reach the workspace. The reader iframe has a descriptive title, strict sandbox, and no remote media access.
 
 ## Manual review procedure
 

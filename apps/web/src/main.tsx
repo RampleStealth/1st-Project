@@ -54,13 +54,18 @@ export function Workspace({ mailbox, mode = "mailbox" }: { mailbox: MailboxSumma
   const selectedView = draftId ? "drafts" : views.some(([key]) => key === view) ? view : "inbox";
   const searchIdentity = searchCriteriaOwnershipKey(searchCriteria);
   const workspaceIdentity = searchMode ? `${mailbox.id}:search:${searchIdentity}` : `${mailbox.id}:${selectedView}`;
+  const workspaceIdentityRef = useRef(workspaceIdentity); workspaceIdentityRef.current = workspaceIdentity;
   const lastSelectedThreadId = useRef<string | null>(null);
   useEffect(() => { if (threadId) lastSelectedThreadId.current = threadId; }, [threadId]);
   const closeReader = useCallback((afterArchive = false) => {
     const priorThreadId = lastSelectedThreadId.current;
+    const focusOwner = workspaceIdentity;
     navigate(searchMode ? searchBrowserPath(mailbox.id, searchCriteria) : `/mail/${mailbox.id}/${selectedView}`);
-    requestAnimationFrame(() => afterArchive ? focusFirstThreadRow() : priorThreadId && focusThreadRow(priorThreadId));
-  }, [mailbox.id, navigate, searchIdentity, searchMode, selectedView]);
+    requestAnimationFrame(() => {
+      if (workspaceIdentityRef.current !== focusOwner) return;
+      if (afterArchive || !priorThreadId || !focusThreadRow(priorThreadId)) focusFirstThreadRow();
+    });
+  }, [mailbox.id, navigate, searchIdentity, searchMode, selectedView, workspaceIdentity]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -72,7 +77,7 @@ export function Workspace({ mailbox, mode = "mailbox" }: { mailbox: MailboxSumma
   }, [closeReader, draftId, mailbox.id, selectedView, threadId]);
   const requestWritePermission = () => window.dispatchEvent(new Event("aio:request-write-permission"));
   if (routeMailboxId !== mailbox.id) return <Navigate to={`/mail/${mailbox.id}/inbox`} replace />;
-  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={searchMode ? "search" : selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column">{searchMode ? <MailboxSearch key={workspaceIdentity} mailboxId={mailbox.id} criteria={searchCriteria} selectedThreadId={threadId} /> : <ThreadList key={workspaceIdentity} mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} />}</section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer key={`${workspaceIdentity}:local:${draftId}`} mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : !searchMode && selectedView === "drafts" && !threadId ? <DraftComposer key={`${workspaceIdentity}:new`} mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader key={`${workspaceIdentity}:thread:${threadId ?? "none"}`} mailboxId={mailbox.id} threadId={threadId} view={searchMode ? "search" : selectedView} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
+  return <div className="workspace"><a className="skip-link" href="#workspace-main">Skip to workspace</a><Sidebar mailbox={mailbox} selectedView={searchMode ? "search" : selectedView} /><main id="workspace-main" className="workspace-main"><h1 className="sr-only">Mailbox workspace</h1><ConnectionBanner mailbox={mailbox} /><WritePermission mailbox={mailbox} /><div className={`mail-layout${threadId || draftId ? " mail-layout--reader-open" : ""}`}><section className="thread-column">{searchMode ? <MailboxSearch key={workspaceIdentity} mailboxId={mailbox.id} criteria={searchCriteria} selectedThreadId={threadId} /> : <ThreadList key={workspaceIdentity} mailboxId={mailbox.id} view={selectedView} selectedThreadId={threadId} />}</section><aside className="reader-column" aria-label="Thread reader">{draftId ? <DraftComposer key={`${workspaceIdentity}:local:${draftId}`} mailboxId={mailbox.id} draftId={draftId} onPermissionRequired={requestWritePermission} /> : !searchMode && selectedView === "drafts" && !threadId ? <DraftComposer key={`${workspaceIdentity}:new`} mailboxId={mailbox.id} onPermissionRequired={requestWritePermission} /> : <ThreadReader key={`${workspaceIdentity}:thread:${threadId ?? "none"}`} mailboxId={mailbox.id} threadId={threadId} view={searchMode ? "search" : selectedView} focusOnLoad={searchMode} onArchived={() => closeReader(true)} onUnread={() => undefined} onClose={() => closeReader()} onEditDraft={(localDraftId) => navigate(localDraftEditPath(mailbox.id, localDraftId))} onPermissionRequired={requestWritePermission} />}</aside></div></main></div>;
 }
 
 function App() {

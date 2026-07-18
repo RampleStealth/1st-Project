@@ -80,5 +80,7 @@
 .search-date-note,.search-summary{margin:8px 0 0;color:#667085;font-size:12px}
 .search-date-note{grid-column:1/-1;margin:0}
 .search-panel>.thread-list{flex:1 1 0;min-height:0}
+.thread-list__header .thread-list__heading{margin:0;color:#101828;font-size:15px;font-weight:700;text-transform:none}
+.thread-list-state h2,.thread-list-state h3{margin:0;color:#101828;font-size:18px}
 @media(max-width:760px){.search-form__primary{display:grid;grid-template-columns:1fr 1fr}.search-form__primary>input{grid-column:1/-1}.search-filters{grid-template-columns:1fr 1fr}}
 @media(max-width:460px){.search-form__primary,.search-filters{grid-template-columns:1fr}.search-form .button{width:100%}.search-form__primary>input{grid-column:auto}}

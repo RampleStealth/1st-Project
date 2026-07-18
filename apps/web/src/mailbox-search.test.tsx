@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { MailboxSearch, searchCriteriaFromParams, type SearchFormCriteria } from "./mailbox-search.js";
 import { ThreadReader } from "./thread-reader.js";
+import { focusThreadRow } from "./workspace-focus.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -20,11 +21,39 @@ function SearchRoute() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const searchCriteria = searchCriteriaFromParams(params);
-  return <><button type="button" onClick={() => navigate(-1)}>Back</button><button type="button" onClick={() => navigate(1)}>Forward</button><MailboxSearch mailboxId="mailbox" criteria={searchCriteria} selectedThreadId={threadId} />{threadId && <ThreadReader mailboxId="mailbox" threadId={threadId} view="search" />}</>;
+  return <><button type="button" onClick={() => navigate(-1)}>Back</button><button type="button" onClick={() => navigate(1)}>Forward</button><MailboxSearch mailboxId="mailbox" criteria={searchCriteria} selectedThreadId={threadId} />{threadId && <ThreadReader mailboxId="mailbox" threadId={threadId} view="search" focusOnLoad onClose={() => { navigate(-1); requestAnimationFrame(() => focusThreadRow(threadId)); }} />}</>;
 }
 function routed(initialEntries = ["/mail/mailbox/search"]) { return <MemoryRouter initialEntries={initialEntries}><Routes><Route path="/mail/:mailboxId/search" element={<SearchRoute />} /><Route path="/mail/:mailboxId/search/:threadId" element={<SearchRoute />} /></Routes></MemoryRouter>; }
 
 describe("provider-backed mailbox search", () => {
+  it("exposes named Search semantics, an unapplied-criteria state, and the slash focus shortcut", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(page([]))));
+    render(routed());
+    const form = screen.getByRole("search", { name: "Search mailbox" });
+    const input = screen.getByRole("searchbox", { name: "Search Gmail" });
+    expect(form).toBeTruthy();
+    expect(input.getAttribute("aria-keyshortcuts")).toBe("/");
+    screen.getByRole("button", { name: "Back" }).focus();
+    fireEvent.keyDown(window, { key: "/" });
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: "invoice" } });
+    expect(screen.getByText("Search criteria changed. Press Search to apply.").getAttribute("role")).toBe("status");
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("closes filters with Escape, restores disclosure focus, and describes Gmail date semantics", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(page([]))));
+    render(routed());
+    const filters = screen.getByRole("button", { name: "Filters" });
+    fireEvent.click(filters);
+    const after = screen.getByLabelText("After");
+    expect(after.getAttribute("aria-describedby")).toContain("mailbox-search-date-note");
+    after.focus();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(filters.getAttribute("aria-expanded")).toBe("false");
+    await waitFor(() => expect(document.activeElement).toBe(filters));
+  });
+
   it("does not call Gmail or the application API until an explicit search is submitted", async () => {
     const fetch = vi.fn(async () => response(page([])));
     vi.stubGlobal("fetch", fetch);
@@ -49,8 +78,10 @@ describe("provider-backed mailbox search", () => {
     fireEvent.change(screen.getByLabelText("After"), { target: { value: "2026-07-01" } });
     fireEvent.click(screen.getByLabelText("Unread"));
     expect(fetch).not.toHaveBeenCalled();
+    expect(screen.getByText("Search criteria changed. Press Search to apply.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByRole("heading", { name: "No matching conversations" })).toBeTruthy();
+    expect(screen.getByLabelText("Applied search criteria").textContent).toContain("From Billing Team");
     const url = String(fetch.mock.calls[0][0]);
     expect(url).toContain("from=Billing+Team");
     expect(url).toContain("after=2026-07-01");
@@ -122,9 +153,119 @@ describe("provider-backed mailbox search", () => {
     expect(screen.getByRole("button", { name: "Next" })).toHaveProperty("disabled", true);
     await act(async () => second.resolve(response(page([item("2")]))));
     expect(await screen.findByRole("button", { name: "Previous" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Search results" })));
+    expect(screen.getByText("Page 2")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     expect(await screen.findByLabelText("Subject 1 from Sender 1")).toBeTruthy();
+  });
+
+  it("keeps failed pagination uncommitted and restarts an expired cursor from page one", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(page([item("1")], "expired")))
+      .mockResolvedValueOnce(response({ code: "invalid_cursor", message: "This search page is no longer valid. Run the search again." }, false, 400))
+      .mockResolvedValueOnce(response(page([item("2")])));
+    vi.stubGlobal("fetch", fetch);
+    render(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria()} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    expect(await screen.findByRole("button", { name: "Restart from first page" })).toBeTruthy();
+    expect(screen.getByLabelText("Subject 1 from Sender 1")).toBeTruthy();
+    expect(screen.getByText("Page 1")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Previous" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Restart from first page" }));
+    expect(await screen.findByLabelText("Subject 2 from Sender 2")).toBeTruthy();
+    expect(String(fetch.mock.calls[2][0])).not.toContain("cursor=");
+  });
+
+  it("clears a selected reader only after a new Search page is confirmed", async () => {
+    const nextPage = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.includes("/threads/thread-1")) return Promise.resolve(response(thread("thread-1")));
+      if (url.includes("cursor=next")) return nextPage.promise;
+      return Promise.resolve(response(page([item("1")], "next")));
+    }));
+    render(routed(["/mail/mailbox/search/thread-1?q=invoice"]));
+    expect(await screen.findByRole("button", { name: "Back to list" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    expect(screen.getByRole("button", { name: "Back to list" })).toBeTruthy();
+    await act(async () => nextPage.resolve(response(page([item("2")]))));
+    expect(await screen.findByLabelText("Subject 2 from Sender 2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Back to list" })).toBeNull();
+  });
+
+  it("refreshes page one when unchanged criteria are explicitly resubmitted", async () => {
+    const refreshed = deferred<Response>();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(page([item("1")], "next")))
+      .mockImplementationOnce(() => refreshed.promise);
+    vi.stubGlobal("fetch", fetch);
+    render(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria()} /></MemoryRouter>);
+    expect(await screen.findByLabelText("Subject 1 from Sender 1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Search" })).toHaveProperty("disabled", true));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => refreshed.resolve(response(page([item("2")]))));
+    expect(await screen.findByLabelText("Subject 2 from Sender 2")).toBeTruthy();
+    expect(String(fetch.mock.calls[1][0])).not.toContain("cursor=");
+  });
+
+  it("supports row-local arrow navigation without opening or submitting a result", async () => {
+    const fetch = vi.fn(async () => response(page([item("1"), item("2"), item("3")])));
+    vi.stubGlobal("fetch", fetch);
+    render(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria()} /></MemoryRouter>);
+    const first = await screen.findByLabelText("Subject 1 from Sender 1");
+    const second = screen.getByLabelText("Subject 2 from Sender 2");
+    const third = screen.getByLabelText("Subject 3 from Sender 3");
+    expect(screen.getByRole("region", { name: "Search results" }).getAttribute("aria-busy")).toBe("false");
+    expect(screen.getByRole("heading", { name: "Search results" }).tagName).toBe("H2");
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+    fireEvent.keyDown(second, { key: "End" });
+    expect(document.activeElement).toBe(third);
+    fireEvent.keyDown(third, { key: "Home" });
+    expect(document.activeElement).toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not steal result focus when a superseded page response arrives", async () => {
+    const latePage = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("cursor=next") ? latePage.promise : Promise.resolve(response(page([item("1")], "next")))));
+    const rendered = render(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria()} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    rendered.rerender(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria({ query: "replacement" })} /></MemoryRouter>);
+    const search = screen.getByRole("searchbox", { name: "Search Gmail" });
+    search.focus();
+    await act(async () => latePage.resolve(response(page([item("2")]))));
+    expect(document.activeElement).toBe(search);
+    expect(screen.queryByLabelText("Subject 2 from Sender 2")).toBeNull();
+  });
+
+  it("focuses an invalid structured field and exposes a reconnect action without leaking provider details", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({ code: "invalid_search_request", message: "Check the search terms and filters, then try again.", field: "from" }, false, 400)));
+    const invalid = render(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria({ from: "bad" })} /></MemoryRouter>);
+    await screen.findByRole("alert");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("From")));
+    expect(screen.getByLabelText("From").getAttribute("aria-invalid")).toBe("true");
+    invalid.unmount();
+
+    vi.stubGlobal("fetch", vi.fn(async () => response({ code: "provider_reauthentication_required", message: "Reconnect Gmail before searching your mailbox.", retryable: false }, false, 409)));
+    render(<MemoryRouter><MailboxSearch mailboxId="mailbox" criteria={criteria()} /></MemoryRouter>);
+    const reconnect = await screen.findByRole("button", { name: "Reconnect Gmail" });
+    expect(reconnect.closest("form")?.getAttribute("action")).toBe("/v1/auth/google/start");
+    expect(document.body.textContent).not.toContain("access_token");
+  });
+
+  it("opens a Search reader with owned focus and restores the originating row on close", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/search?") ? response(page([item("1")])) : response(thread("thread-1"))));
+    render(routed(["/mail/mailbox/search?q=invoice"]));
+    const row = await screen.findByLabelText("Subject 1 from Sender 1");
+    fireEvent.click(row);
+    const close = await screen.findByRole("button", { name: "Back to list" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    fireEvent.click(close);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Subject 1 from Sender 1")));
   });
 
   it("preserves archived Search rows and applies confirmed unread only to the matching result", async () => {

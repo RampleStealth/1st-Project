@@ -50,7 +50,7 @@ function dateTime(value: string | null) {
   return value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "";
 }
 
-export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, onClose, onEditDraft, onPermissionRequired }: { mailboxId: string; threadId?: string; view?: string; onArchived?: () => void; onUnread?: () => void; onClose?: () => void; onEditDraft?: (draftId: string) => void; onPermissionRequired?: () => void }) {
+export function ThreadReader({ mailboxId, threadId, view, focusOnLoad = false, onArchived, onUnread, onClose, onEditDraft, onPermissionRequired }: { mailboxId: string; threadId?: string; view?: string; focusOnLoad?: boolean; onArchived?: () => void; onUnread?: () => void; onClose?: () => void; onEditDraft?: (draftId: string) => void; onPermissionRequired?: () => void }) {
   const readerIdentity = `${mailboxId}:${view ?? "unknown"}:${threadId ?? "none"}`;
   const readerIdentityRef = useRef(readerIdentity); readerIdentityRef.current = readerIdentity;
   const readGeneration = useRef(0);
@@ -70,6 +70,13 @@ export function ThreadReader({ mailboxId, threadId, view, onArchived, onUnread, 
   const searchDraft = view === "search" && searchLabels.has("DRAFT");
   const canArchive = view !== "drafts" && (view !== "search" || (searchLabels.has("INBOX") && !searchDraft));
   const canMarkUnread = view !== "drafts" && !searchDraft;
+  useEffect(() => {
+    if (!focusOnLoad || state !== "ready" || !thread) return;
+    const focusOwner = readerIdentity;
+    requestAnimationFrame(() => {
+      if (readerIdentityRef.current === focusOwner) document.querySelector<HTMLButtonElement>(".thread-reader .reader-close")?.focus();
+    });
+  }, [focusOnLoad, readerIdentity, state, thread]);
   useEffect(() => () => {
     const lifecycle = activeLifecycle.current;
     if (lifecycle) disposeCommandLifecycle(lifecycle);

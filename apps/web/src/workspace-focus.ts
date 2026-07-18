@@ -1,7 +1,11 @@
 export function focusThreadRow(threadId: string) {
-  document.getElementById(`thread-row-${threadId}`)?.focus();
+  const row = document.getElementById(`thread-row-${threadId}`);
+  row?.focus();
+  return Boolean(row);
 }
 
 export function focusFirstThreadRow() {
-  document.querySelector<HTMLButtonElement>("[data-thread-row]")?.focus();
+  const row = document.querySelector<HTMLButtonElement>("[data-thread-row]");
+  row?.focus();
+  return Boolean(row);
 }
