@@ -5,5 +5,6 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "tsx --test src/**/*.test.ts" },
-  "dependencies": { "pino": "^9.6.0" }
+  "dependencies": { "pino": "^9.6.0" },
+  "devDependencies": { "tsx": "^4.19.3" }
 }

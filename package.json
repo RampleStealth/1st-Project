@@ -21,8 +21,11 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "dependencies": {
-    "dotenv": "^17.4.2",
-    "lucide-react": "^1.25.0"
+  "devDependencies": {
+    "@aio/contracts": "*",
+    "@aio/database": "*",
+    "@aio/jobs": "*",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.3"
   }
 }
