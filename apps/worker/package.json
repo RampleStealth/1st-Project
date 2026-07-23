@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": { "dev": "tsx watch src/worker.ts", "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "test": "tsx --test src/**/*.test.ts" },
-  "dependencies": { "@aio/config": "*", "@aio/contracts": "*", "@aio/database": "*", "@aio/gmail": "*", "@aio/jobs": "*", "@aio/observability": "*", "@aio/security": "*", "bullmq": "^5.40.3", "dotenv": "^17.4.2", "ioredis": "^5.5.0" },
+  "dependencies": { "@aio/config": "workspace:*", "@aio/contracts": "workspace:*", "@aio/database": "workspace:*", "@aio/gmail": "workspace:*", "@aio/jobs": "workspace:*", "@aio/observability": "workspace:*", "@aio/security": "workspace:*", "bullmq": "^5.40.3", "dotenv": "^17.4.2", "ioredis": "^5.5.0" },
   "devDependencies": { "@types/node": "^22.13.10", "@types/pg": "^8.20.0", "googleapis": "^144.0.0", "tsx": "^4.19.3", "typescript": "^5.8.2" }
 }

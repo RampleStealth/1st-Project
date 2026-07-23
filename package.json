@@ -1,7 +1,7 @@
 {
   "name": "ai-email-organizer",
   "private": true,
-  "packageManager": "npm@11.16.0",
+  "packageManager": "pnpm@11.15.1",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -22,9 +22,9 @@
     "node": ">=22.0.0"
   },
   "devDependencies": {
-    "@aio/contracts": "*",
-    "@aio/database": "*",
-    "@aio/jobs": "*",
+    "@aio/contracts": "workspace:*",
+    "@aio/database": "workspace:*",
+    "@aio/jobs": "workspace:*",
     "esbuild": "^0.28.1",
     "tsx": "^4.19.3"
   }
