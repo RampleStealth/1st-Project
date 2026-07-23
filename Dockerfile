@@ -17,6 +17,8 @@ RUN pnpm --filter @aio/api --prod deploy --legacy /deploy/api
 RUN pnpm --filter @aio/worker --prod deploy --legacy /deploy/worker
 RUN pnpm --filter @aio/web --prod deploy --legacy /deploy/web
 RUN pnpm --filter @aio/database --prod deploy --legacy /deploy/database
+RUN cp -R packages/database/migrations /deploy/api/migrations \
+    && cp -R packages/database/migrations /deploy/worker/migrations
 
 FROM node:22.23.1-alpine AS runtime
 WORKDIR /app
