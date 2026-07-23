@@ -5,6 +5,9 @@ packages:
 nodeVersion: 22.23.1
 engineStrict: true
 nodeLinker: isolated
+enableGlobalVirtualStore: false
+verifyDepsBeforeRun: error
 
 allowBuilds:
   esbuild: true
+  msgpackr-extract: false

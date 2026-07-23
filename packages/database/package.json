@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": ["migrations", "runtime"],
   "exports": {
     ".": "./src/index.ts",
     "./repositories/mailbox-sync": "./src/repositories/mailbox-sync-repository.ts",

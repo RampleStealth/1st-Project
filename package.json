@@ -7,12 +7,12 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "check": "npm run lint --workspaces --if-present && npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "db:migrate": "npm run db:migrate -w @aio/database",
-    "db:status": "npm run db:status -w @aio/database",
-    "db:verify": "npm run db:verify -w @aio/database",
+    "build": "pnpm -r --if-present run build",
+    "check": "pnpm -r --if-present run lint && pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "db:migrate": "pnpm --filter @aio/database run db:migrate",
+    "db:status": "pnpm --filter @aio/database run db:status",
+    "db:verify": "pnpm --filter @aio/database run db:verify",
     "build:runtime": "node scripts/build-runtime.mjs",
     "ops:summary": "tsx scripts/operations.ts summary",
     "ops:replay-queue": "tsx scripts/operations.ts replay-queue",
