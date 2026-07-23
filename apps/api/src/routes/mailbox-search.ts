@@ -1,8 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "@aio/config";
-import type { MailboxSearchCriteria } from "@aio/contracts";
+import type { MailboxSearchCriteria, ThreadProjectionInput } from "@aio/contracts";
 import type { MailboxAccount } from "@aio/database";
-import type { ProviderThreadMetadata } from "@aio/database/repositories/thread-projection";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
 import { classifyGmailError, isGmailProviderError, sanitizeGmailProviderError } from "@aio/gmail";
 import type { Pool, PoolClient } from "pg";
@@ -15,7 +14,7 @@ export type SearchMailboxThreads = (
   criteria: MailboxSearchCriteria,
   pageToken: string | undefined,
   limit: number
-) => Promise<{ threads: ProviderThreadMetadata[]; nextPageToken: string | null }>;
+) => Promise<{ threads: ThreadProjectionInput[]; nextPageToken: string | null }>;
 
 type Dependencies = {
   config: AppConfig;

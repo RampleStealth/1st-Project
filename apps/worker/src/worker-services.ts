@@ -3,10 +3,10 @@ import { findMailboxById, pool, withTransaction, type MailboxAccount } from "@ai
 import { applyProcessedHistory, beginInitialSync, claimDueReconciliations, ensureMailboxSyncState, getMailboxSyncState, recordSyncFailure, releaseReconciliationClaim } from "@aio/database/repositories/mailbox-sync";
 import { upsertThreadProjection } from "@aio/database/repositories/thread-projection";
 import { getWorkerDatabaseDiagnostics, markWorkerDraining, markWorkerStopped, recordWorkerHeartbeat, recordWorkerStarted, repairInconsistentDraftStates } from "@aio/database/repositories/worker-runtime";
-import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, getMessage, getThread, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, sendDraft, updateDraft, watchMailbox } from "@aio/gmail";
+import { archiveThread, changedMessageIds, classifyGmailError, classifyGmailMutationError, createDraft, currentHistoryId, findDraftByRfc822MessageId, findSentMessageByRfc822MessageId, getDraft, getMessage, gmailForMailbox, hydrateThreadMetadata, initialThreadIds, isGmailProviderError, markThreadUnread, sanitizeGmailMutationError, sanitizeGmailProviderError, sendDraft, updateDraft, watchMailbox } from "@aio/gmail";
 import { closeQueues, enqueueProviderCommand, enqueueSync, gmailCommandsQueue, syncQueue } from "@aio/jobs";
 import { logger, metrics } from "@aio/observability";
-import type { SyncErrorCode, SyncJob } from "@aio/contracts";
+import type { SyncErrorCode, SyncJob, ThreadProjectionInput } from "@aio/contracts";
 import { hasUnprocessedPendingHistory, shouldRetryForUnavailableHistory } from "./sync-state.js";
 import { claimCommand, claimCreateDraftRecovery, claimOutboxEvents, claimSendDraftRecovery, claimUpdateDraftRecovery, completeClaim, completeConfirmedMutation, completeFailedMutation, completeRecoveredDraftCreation, completeRecoveredDraftSend, completeRecoveryRequiredMutation, loadClaimedCommand, markOutboxPublished, markProviderExecutionStarted, recoverExpiredLeases, releaseCreateDraftRecoveryClaim, releaseOutboxClaim, releaseSendDraftRecoveryClaim, releaseUpdateDraftRecoveryClaim, scheduleRetryFromClaim, StaleCommandClaimError } from "@aio/database/repositories/provider-command";
 import { executeProviderCommand, verifyCreateDraftRecovery, verifySendDraftRecovery, verifyUpdateDraftRecovery } from "./provider-command-executor.js";
@@ -35,7 +35,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
 
 const outboxDispatchConcurrency = 5;
 
-type HistoryBatch = { processedHistoryId: string; deletedMessageIds: string[]; threads: Awaited<ReturnType<typeof getThread>>[] };
+type HistoryBatch = { processedHistoryId: string; deletedMessageIds: string[]; threads: ThreadProjectionInput[] };
 
 export function createWorkerServices(config: AppConfig): WorkerRuntimeServices {
   const commandDependencies = {

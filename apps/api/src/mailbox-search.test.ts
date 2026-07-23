@@ -88,7 +88,7 @@ async function makeApp() {
     findMailboxForUser: async (id, userId) => id === mailboxId && userId === ownerId ? mailbox(mailboxId, ownerId) : null,
     searchMailboxThreads: async (selectedMailbox, searchCriteria, pageToken, limit) => {
       calls.push({ mailboxId: selectedMailbox.id, criteria: searchCriteria, pageToken, limit });
-      return { threads: [{ id: "provider-thread", messages: [{ id: "provider-message", internalDate: "1784376000000", labelIds: ["INBOX"], snippet: "August", payload: { headers: [{ name: "From", value: "Billing" }, { name: "Subject", value: "Invoice" }] } }] }], nextPageToken: pageToken ? null : "private-next-token" };
+      return { threads: [{ providerThreadId: "provider-thread", messages: [{ providerMessageId: "provider-message", internalTimestamp: "2026-07-18T12:00:00.000Z", labels: ["INBOX"], snippet: "August", subject: "Invoice", from: { displayName: "Billing", address: "billing@example.test" }, to: [], cc: [], hasAttachments: false }] }], nextPageToken: pageToken ? null : "private-next-token" };
     },
     ensureMailboxSyncState: async () => undefined, recordPendingHistory: async () => undefined, enqueueSync: async () => undefined,
     insertProviderCommand: async () => ({ id: "command", commandType: "archive_thread", status: "pending" }),

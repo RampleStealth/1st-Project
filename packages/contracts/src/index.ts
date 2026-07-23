@@ -72,6 +72,29 @@ export const threadListItemSchema = z.object({
 });
 export type ThreadListItem = z.infer<typeof threadListItemSchema>;
 
+export type NormalizedMailboxAddress = {
+  displayName: string | null;
+  address: string;
+};
+
+export type ThreadProjectionMessage = {
+  providerMessageId: string;
+  internalTimestamp: string | null;
+  labels: string[];
+  snippet: string | null;
+  subject: string | null;
+  from: NormalizedMailboxAddress | null;
+  to: NormalizedMailboxAddress[];
+  cc: NormalizedMailboxAddress[];
+  hasAttachments: boolean;
+};
+
+/** Provider-neutral metadata accepted by the durable mailbox projection. */
+export type ThreadProjectionInput = {
+  providerThreadId: string;
+  messages: ThreadProjectionMessage[];
+};
+
 export const threadListPageSchema = z.object({
   items: z.array(threadListItemSchema),
   nextCursor: z.string().min(1).nullable(),

@@ -2,9 +2,11 @@ import { google, gmail_v1 } from "googleapis";
 import { CodeChallengeMethod } from "google-auth-library";
 import type { AppConfig } from "@aio/config";
 import { decryptSecret } from "@aio/security";
-import { mailboxSearchCriteriaSchema, type MailboxSearchCriteria, type MailboxView, type SyncErrorCode } from "@aio/contracts";
+import { mailboxSearchCriteriaSchema, type MailboxSearchCriteria, type MailboxView, type SyncErrorCode, type ThreadProjectionInput } from "@aio/contracts";
 import { metrics, observe } from "@aio/observability";
+import { normalizeThreadProjection } from "./thread-metadata.js";
 export * from "./thread-display.js";
+export * from "./thread-metadata.js";
 export * from "./draft-mime.js";
 
 const gmailScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
@@ -86,8 +88,15 @@ export async function getMessage(gmail: gmail_v1.Gmail, id: string) {
   return (await observeGmail("messages.get", () => gmail.users.messages.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "Subject", "Date"] }))).data;
 }
 
+function projectionPartFields(depth: number): string {
+  const metadata = "filename,mimeType,body(attachmentId,size)";
+  return depth > 0 ? `${metadata},parts(${projectionPartFields(depth - 1)})` : metadata;
+}
+
 export async function getThread(gmail: gmail_v1.Gmail, id: string) {
-  return (await observeGmail("threads.get", () => gmail.users.threads.get({ userId: "me", id, format: "metadata", metadataHeaders: ["From", "To", "Cc", "Subject", "Date"] }))).data;
+  const fields = `id,messages(id,internalDate,labelIds,snippet,payload(headers,${projectionPartFields(8)}))`;
+  const response = await observeGmail("threads.get", () => gmail.users.threads.get({ userId: "me", id, format: "full", fields }));
+  return normalizeThreadProjection(response.data);
 }
 
 /** Full structured MIME only; never request Gmail's raw message format. */
@@ -294,7 +303,7 @@ export async function hydrateThreadMetadata(gmail: gmail_v1.Gmail, threadIds: st
       throw error;
     }
   });
-  return hydrated.filter((thread): thread is gmail_v1.Schema$Thread => Boolean(thread));
+  return hydrated.filter((thread): thread is ThreadProjectionInput => Boolean(thread));
 }
 
 export async function currentHistoryId(gmail: gmail_v1.Gmail): Promise<string> {
