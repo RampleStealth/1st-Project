@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": ["migrations", "runtime"],
   "exports": {
     ".": "./src/index.ts",
     "./repositories/mailbox-sync": "./src/repositories/mailbox-sync-repository.ts",
@@ -19,7 +20,7 @@
     "db:verify": "tsx src/migration-verify.ts"
   },
   "dependencies": {
-    "@aio/contracts": "*", "@aio/security": "*",
+    "@aio/contracts": "workspace:*", "@aio/security": "workspace:*",
     "dotenv": "^17.4.2",
     "pg": "^8.14.1"
   },

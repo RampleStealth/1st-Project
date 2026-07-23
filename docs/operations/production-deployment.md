@@ -4,18 +4,22 @@
 
 Build once in the supplied multi-stage `Dockerfile`. The builder bundles TypeScript into Node 22 runtime artifacts and produces the static web build; the runtime image contains production dependencies only, runs as the non-root `aio` user, and excludes `.env` files and source maps. Run the image with one explicit command per role:
 
-- API: `node runtime/api/server.js`
-- worker: `node runtime/worker/worker.js`
-- web: `node runtime/web/server-dist/server.js`
+- API: `node api/runtime/server.js`
+- worker: `node worker/runtime/worker.js`
+- web: `node web/runtime/server.js`
+
+The image contains independent pnpm deployment roots for API, worker, web, and database tooling. Each root includes only its reviewed production dependency closure; runtime module resolution does not depend on a flat workspace-level `node_modules`.
+
+The Docker build currently invokes `pnpm deploy --legacy` because the reviewed pnpm release otherwise requires workspace-package injection for deploy. This selects pnpm's legacy deploy implementation only: it does not enable hoisting or change the isolated development linker. Reassess the bridge when adopting a pnpm release whose standard deploy path can package the bundled internal workspaces without `injectWorkspacePackages`; remove it only after the same image startup and module-resolution gates pass.
 
 Serve web, API, worker, PostgreSQL, Redis, and the protected diagnostics network separately. API and workers can scale horizontally; PostgreSQL and Redis are shared. Gmail and Pub/Sub are external integrations. V1 operates one Gmail account per user, one region, conservative worker concurrency, and a controlled cohort.
 
 ## Release sequence and rollback
 
 1. Build and label the immutable image with `RELEASE_VERSION`, `RELEASE_COMMIT_SHA`, and `RELEASE_BUILT_AT`.
-2. Run exactly one migration runner: `npm run db:migrate`, then `npm run db:verify`.
+2. Run exactly one migration runner from the image: `node database/runtime/migrate.js`, then `node database/runtime/migration-verify.js`.
 3. Deploy API instances, wait for `/readyz`, then drain/restart workers with `SIGTERM` and `WORKER_SHUTDOWN_DRAIN_MS`.
-4. Run `npm run ops:summary` and protected diagnostics checks. Promote only when heartbeat and queue age are healthy.
+4. Run `node worker/runtime/operations.js summary` and protected diagnostics checks. Promote only when heartbeat and queue age are healthy.
 
 Rollback application code only; migrations are additive and are not reversed automatically. Do not delete commands, outbox rows, or drafts. A release whose migration manifest is missing from the database fails before API or worker clients are constructed, preventing unsafe schema drift.
 

@@ -4,5 +4,5 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@aio/contracts": "*", "bullmq": "^5.40.3", "ioredis": "^5.5.0" }
+  "dependencies": { "@aio/contracts": "workspace:*", "bullmq": "^5.40.3" }
 }

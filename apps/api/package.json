@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": ["runtime"],
   "scripts": { "dev": "tsx watch src/server.ts", "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "test": "tsx --test src/**/*.test.ts" },
-  "dependencies": { "@aio/config": "*", "@aio/contracts": "*", "@aio/database": "*", "@aio/gmail": "*", "@aio/jobs": "*", "@aio/observability": "*", "@aio/security": "*", "@fastify/cookie": "^10.0.1", "@fastify/cors": "^10.0.2", "fastify": "^5.2.1", "google-auth-library": "^9.15.1", "ioredis": "^5.5.0", "tsx": "^4.19.3" },
-  "devDependencies": { "@types/node": "^22.13.10", "typescript": "^5.8.2" }
+  "dependencies": { "@aio/config": "workspace:*", "@aio/contracts": "workspace:*", "@aio/database": "workspace:*", "@aio/gmail": "workspace:*", "@aio/jobs": "workspace:*", "@aio/observability": "workspace:*", "@aio/security": "workspace:*", "@fastify/cookie": "^10.0.1", "@fastify/cors": "^10.0.2", "bullmq": "^5.40.3", "dotenv": "^17.4.2", "fastify": "^5.2.1", "google-auth-library": "^9.15.1", "googleapis": "^144.0.0", "ioredis": "^5.5.0", "pg": "^8.14.1", "pino": "^9.6.0", "sanitize-html": "^2.17.0", "zod": "^3.24.2" },
+  "devDependencies": { "@types/node": "^22.13.10", "@types/pg": "^8.20.0", "tsx": "^4.19.3", "typescript": "^5.8.2" }
 }

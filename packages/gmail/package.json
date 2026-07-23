@@ -5,6 +5,6 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "tsx --test src/**/*.test.ts" },
-  "dependencies": { "@aio/config": "*", "@aio/contracts": "*", "@aio/security": "*", "googleapis": "^144.0.0", "sanitize-html": "^2.17.0", "tsx": "^4.19.3" },
-  "devDependencies": { "@types/sanitize-html": "^2.16.0" }
+  "dependencies": { "@aio/config": "workspace:*", "@aio/contracts": "workspace:*", "@aio/observability": "workspace:*", "@aio/security": "workspace:*", "google-auth-library": "^9.15.1", "googleapis": "^144.0.0", "sanitize-html": "^2.17.0" },
+  "devDependencies": { "@types/sanitize-html": "^2.16.0", "tsx": "^4.19.3" }
 }
