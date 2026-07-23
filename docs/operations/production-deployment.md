@@ -10,6 +10,8 @@ Build once in the supplied multi-stage `Dockerfile`. The builder bundles TypeScr
 
 The image contains independent pnpm deployment roots for API, worker, web, and database tooling. Each root includes only its reviewed production dependency closure; runtime module resolution does not depend on a flat workspace-level `node_modules`.
 
+The Docker build currently invokes `pnpm deploy --legacy` because the reviewed pnpm release otherwise requires workspace-package injection for deploy. This selects pnpm's legacy deploy implementation only: it does not enable hoisting or change the isolated development linker. Reassess the bridge when adopting a pnpm release whose standard deploy path can package the bundled internal workspaces without `injectWorkspacePackages`; remove it only after the same image startup and module-resolution gates pass.
+
 Serve web, API, worker, PostgreSQL, Redis, and the protected diagnostics network separately. API and workers can scale horizontally; PostgreSQL and Redis are shared. Gmail and Pub/Sub are external integrations. V1 operates one Gmail account per user, one region, conservative worker concurrency, and a controlled cohort.
 
 ## Release sequence and rollback
