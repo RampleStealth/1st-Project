@@ -2,7 +2,7 @@
 
 ## Guardrails
 
-Use dedicated isolated Gmail test accounts only. Never use a personal or production mailbox for mutation or send tests. Begin with `npm run validate:gmail:dry-run`; it creates a local, secret-free JSON template and makes zero provider calls. The live flag deliberately blocks: a human operator must perform the documented checks and record only run ID, timestamp, environment, release, operation, pass/fail/blocked, safe reason code, correlation ID, and content-free notes.
+Use dedicated isolated Gmail test accounts only. Never use a personal or production mailbox for mutation or send tests. Begin with `pnpm validate:gmail:dry-run`; it creates a local, secret-free JSON template and makes zero provider calls. The live flag deliberately blocks: a human operator must perform the documented checks and record only run ID, timestamp, environment, release, operation, pass/fail/blocked, safe reason code, correlation ID, and content-free notes.
 
 Use a unique run ID and a non-secret subject/body marker. Do not record tokens, raw Gmail responses, recipients beyond approved aliases, Gmail IDs, Message-IDs, or message content. Separate read-only checks from archive/unread/draft/send checks. Clean up test messages and drafts manually after recording results.
 
