@@ -164,8 +164,23 @@ Availability does not authorize a field as a ranking signal. The exact operative
 
   Do not emit `RECENCY` merely because a valid timestamp exists. The `RECENCY` reason code remains registered but inactive unless a future Founder-approved rule gives it an explanatory constitutional condition.
 
-  `NEEDS_ATTENTION` remains available for explicit correction mappings or other future Founder-approved rules. This decision does not resolve combined-signal behavior, corrections, missing metadata, or provider-specific mappings.
-- **PPV1-012 — Combined-signal behavior:** TODO (Founder Approval Required): Define how simultaneous signals combine, including precedence, promotion, and whether combinations change tier.
+  `NEEDS_ATTENTION` remains available for explicit correction mappings or other future Founder-approved rules. This decision does not resolve corrections, missing metadata, or provider-specific mappings.
+- **PPV1-012 — Combined-signal behavior:** Highest assigned tier wins, with no combinational promotion.
+  1. **Individual rule evaluation:** Each applicable approved constitutional rule evaluates independently and may produce only its Founder-approved tier assignment and authorized reason.
+  2. **Correction handling:** Active user corrections are resolved under PPV1-025 through PPV1-027 before ordinary rule conflict resolution.
+  3. **Final tier assignment:** After correction handling, the final tier is the constitutionally highest tier actually assigned by an applicable approved rule.
+  4. **No accumulation:** Multiple signals shall not accumulate, add weight, or combine into a higher tier merely because they coexist. A combination may produce a distinct or higher tier only when a separate Founder-approved constitutional combination rule explicitly assigns that outcome.
+  5. **Reasons:** Reasons remain governed by PPV1-018 and PPV1-019. This decision does not determine whether lower-tier supporting reasons remain visible in a higher-tier result.
+
+  Current approved example:
+
+  - Manual Star plus Recency:
+    - `tier`: `REVIEW_LATER`
+    - `reasonCodes`: [`MANUAL_STAR`]
+
+  `RECENCY` remains inactive and is not emitted. Recency may still order otherwise constitutionally equal candidates.
+
+  The policy shall not use scores, weights, confidence values, probabilistic ranking, or inferred promotion.
 - **PPV1-014 — Attachment treatment:** TODO (Founder Approval Required): State explicitly whether attachment presence affects Priority Policy v1 or is projection metadata only.
 - **PPV1-015 — Sender and recipient treatment:** TODO (Founder Approval Required): State explicitly whether normalized addresses affect Priority Policy v1 or are projection metadata only.
 
