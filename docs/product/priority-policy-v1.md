@@ -107,13 +107,17 @@ Candidate selection must be deterministic. Given the same normalized projection,
 
 ## 5. Priority tiers
 
-The exact tier vocabulary and semantics were not preserved in an authoritative repository document.
+The constitutional tier identifiers are:
 
-- **PPV1-007 — Tier identifiers:** TODO (Founder Approval Required): Approve the complete ordered tier enumeration.
+- `NEEDS_ATTENTION`
+- `REVIEW_LATER`
+- `NO_IMMEDIATE_SIGNALS`
+
+- **PPV1-007 — Tier identifiers:** The identifiers above are the complete Priority Policy v1 tier registry. No implementation may introduce an additional tier under policy version `1.0`.
 - **PPV1-008 — Tier semantics:** TODO (Founder Approval Required): Define the evidence threshold and user-facing meaning of every tier.
 - **PPV1-009 — Default tier:** TODO (Founder Approval Required): Define the tier assigned when a candidate has no affirmative policy signal and no user override.
 
-Tier assignment must be deterministic. The engine must not emit confidence, inferred urgency, or an unapproved intermediate tier.
+Tier assignment must be deterministic. The engine must not emit confidence, inferred urgency, or an unapproved intermediate tier. PPV1-020 remains authoritative for the unresolved priority ordering of the approved identifiers.
 
 ## 6. Deterministic rule set
 
@@ -156,7 +160,7 @@ The caller must supply a fixed `evaluatedAt` instant. Identical policy inputs, i
 | Manual user star | Approved | A manually applied star is an explicit user action and therefore satisfies the constitutional requirements of objective, deterministic, and user-verifiable evidence. |
 | Recency | Approved | Recency provides objective temporal context. It does not represent importance and cannot promote a tier by itself. |
 
-Approval as a signal does not resolve its tier mapping, reason code, human-readable wording, parameter values, or ordering precedence. Those decisions remain governed by PPV1-011, PPV1-012, PPV1-016, PPV1-017, PPV1-018, and the unresolved Recency parameters below.
+Approval as a signal does not resolve its tier mapping, emission condition, canonical human-readable wording, or parameter values. Those decisions remain governed by PPV1-011, PPV1-012, PPV1-017A, and the unresolved Recency parameters below.
 
 #### Not approved signals
 
@@ -223,11 +227,44 @@ Priority Policy remains solely determined by constitutional deterministic rules.
 
 Every affirmative policy conclusion must be explainable through stable, localization-friendly reason codes and approved human-readable wording.
 
-The earlier conversation used possible examples such as `UNREAD`, `STARRED`, `IMPORTANT`, `RECENT`, and `USER_OVERRIDE`, but examples are not an operative approval.
+### PPV1-016 — Evidence-specific reason-code registry
 
-- **PPV1-016 — Reason-code registry:** TODO (Founder Approval Required): Approve the complete reason-code enumeration and the exact condition for emitting each code.
-- **PPV1-017 — Human-readable reasons:** TODO (Founder Approval Required): Approve the exact user-facing wording associated with every reason code.
-- **PPV1-018 — Reason precedence:** TODO (Founder Approval Required): Approve the deterministic order in which simultaneous reasons are returned.
+The constitutional reason-code registry is:
+
+| Reason code | Constitutional evidence | Emission dependency |
+| --- | --- | --- |
+| `USER_PRIORITIZE` | Active Prioritize correction | PPV1-025 |
+| `USER_NOT_IMPORTANT` | Active Not Important correction | PPV1-026 |
+| `MANUAL_STAR` | Provider-verifiable Manual Star | PPV1-011 |
+| `RECENCY` | Objective temporal context | Recency parameter values |
+
+Reason codes identify approved constitutional evidence. They shall never infer importance, urgency, confidence, or AI judgment.
+
+Registration does not authorize emission before the referenced constitutional condition is approved.
+
+### PPV1-017 — Human-readable reason representation
+
+Each reason shall define:
+
+- a stable localization key;
+- canonical Founder-approved English wording.
+
+The Constitution owns semantic meaning. Presentation layers may localize the wording but shall not reinterpret constitutional meaning.
+
+- **PPV1-017A — Localization keys and canonical English wording:** TODO (Founder Approval Required): Approve the exact stable localization key and canonical English wording for each reason code in PPV1-016.
+
+### PPV1-018 — Reason precedence
+
+When simultaneous reasons are emitted, they shall be returned in this constitutional precedence:
+
+1. Active User Correction
+2. Manual Star
+3. Recency
+
+The applicable Active User Correction reason or reasons remain governed by the unresolved correction semantics in PPV1-025 through PPV1-029.
+
+This ordering preserves the constitutional rule that explicit user intent outranks passive metadata.
+
 - **PPV1-019 — Negative reasons:** TODO (Founder Approval Required): Define whether the contract exposes reasons for a lower-priority result or only affirmative evidence.
 
 Implementations must not derive user-facing text from enum names. Codes and wording are separate contract fields.
@@ -322,8 +359,24 @@ Unresolved contract decisions:
 
 - **PPV1-034 — Candidate-scope disclosure:** TODO (Founder Approval Required): Define the exact structured `candidateScope` representation returned with a collection evaluation.
 - **PPV1-035 — Collection envelope:** TODO (Founder Approval Required): Define the collection-level fields needed to truthfully describe bounded coverage, synchronization freshness, and ordering.
-- **PPV1-036 — No-reason representation:** TODO (Founder Approval Required): Define whether `reasonCodes` and `reasons` may be empty and for which tiers.
-- **PPV1-037 — Contract timestamp format:** TODO (Founder Approval Required): Approve the timestamp serialization format and precision.
+
+### PPV1-036 — No-reason representation
+
+Empty `reasonCodes` and `reasons` arrays are permitted only for the `NO_IMMEDIATE_SIGNALS` tier when no affirmative constitutional evidence exists.
+
+The evaluator must not fabricate synthetic evidence. Absence of affirmative evidence shall not itself become affirmative evidence.
+
+### PPV1-037 — Contract timestamp format
+
+All constitutional timestamps use RFC 3339 UTC serialization with millisecond precision.
+
+The canonical format is:
+
+```text
+YYYY-MM-DDTHH:mm:ss.sssZ
+```
+
+The `evaluatedAt` output shall conform exactly to this canonical representation.
 
 ## 13. UX contract
 
@@ -442,6 +495,7 @@ The document structure, philosophy, design promise, deterministic/non-AI boundar
 
 | Version | Status | Date | Decision owner | Change |
 | --- | --- | --- | --- | --- |
+| 1.0 | Approved amendment | 2026-07-24 | Founder | Recorded Founder Design Session #5 contract vocabulary decisions for tier identifiers, evidence-specific reason codes, localized canonical reasons, reason precedence, empty-reason representation, and canonical timestamps. |
 | 1.0 | Approved amendment | 2026-07-24 | Founder | Recorded Founder Design Session #4 decisions defining Recency as objective temporal evidence, prohibiting tier promotion from Recency alone, preserving explicit user-intent precedence, and permitting Recency only as a deterministic tie-breaker when candidates are otherwise constitutionally equal. |
 | 1.0 | Approved amendment | 2026-07-24 | Founder | Recorded Founder Design Session #3 decisions for Manual user star, provider-verifiable signal origin, missing-metadata fallbacks, candidate-count scalability, provider neutrality, explicit User Override, and AI independence. |
 | 1.0 | Approved | Pending PPV1-047 | Founder | Established the repository source of truth under FD-001. Unresolved policy decisions are enumerated for Founder review before executable implementation. |
