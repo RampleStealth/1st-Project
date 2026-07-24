@@ -139,7 +139,7 @@ The exact scope remains unresolved:
   | --- | --- | --- |
   | Candidate timestamp (`PPV1-004A`) | Retain the candidate with an Unknown temporal state; apply no temporal effect. | Approved |
   | Sender (`PPV1-004B`) | Preserve independent Unknown states for display name and address; apply no policy effect. | Approved |
-  | Labels (`PPV1-004C`) | TODO (Founder Approval Required) | Pending |
+  | Labels (`PPV1-004C`) | Preserve independent verified-present, verified-absent, or Unknown states; evaluate only rules whose required label evidence is verified. | Approved |
   | User overrides (`PPV1-004D`) | TODO (Founder Approval Required) | Pending |
 
 ### PPV1-004A — Missing candidate timestamp
@@ -188,6 +188,34 @@ Priority Policy v1 adopts independent Unknown states for sender display name and
    - provides no affirmative or negative evidence.
 5. **Presentation:** Presentation layers may display neutral interface text indicating unavailable sender information. Presentation fallback is interface copy only. It is not normalized sender identity, constitutional evidence, or provider metadata.
 6. **Collection disclosure:** Because sender is non-operative in Priority Policy v1, missing sender metadata requires no collection-level incomplete-evidence disclosure. Future sender-based constitutional rules remain governed by PPV1-015 and future amendments.
+
+### PPV1-004C — Missing labels
+
+Priority Policy v1 adopts independent three-state knowledge for every normalized constitutional label concept:
+
+- verified present;
+- verified absent;
+- Unknown.
+
+1. **Candidate retention:** Missing, incomplete, malformed, or unavailable policy-evidence labels shall not exclude an otherwise PPV1-001-eligible candidate.
+2. **Independent label state:** Each normalized label concept preserves its own independently verified state. An Unknown or malformed label does not invalidate another independently verified label.
+3. **Unknown preservation:** A label is Unknown unless an authoritative provider-normalized result verifies its presence or absence. Unknown shall never be serialized or evaluated as:
+   - `false`;
+   - absent;
+   - an empty label set;
+   - no Manual Star;
+   - no Inbox membership;
+   - no future mapped provider signal.
+4. **Label-dependent rules:** A label-dependent rule evaluates only when its required label condition is verified. For Manual Star:
+   - verified present → apply PPV1-011 and emit `MANUAL_STAR`;
+   - verified absent → Manual Star does not apply;
+   - Unknown → do not evaluate Manual Star and emit no `MANUAL_STAR` reason.
+5. **Label-independent rules:** All approved rules that do not depend on unavailable label evidence continue to evaluate normally.
+6. **Default tier:** If no available approved rule assigns a higher tier, PPV1-009 may independently assign `NO_IMMEDIATE_SIGNALS`. That result shall not be represented as proof that Manual Star was absent when its state was Unknown.
+7. **Disclosure:** Because incomplete label metadata can prevent evaluation of an operative constitutional signal, a collection containing affected candidates shall disclose incomplete label evidence through PPV1-035. PPV1-035 remains responsible for the exact public field names, shape, and serialization.
+8. **Recalculation:** When authoritative label metadata becomes available or changes, the candidate shall be reevaluated under the future PPV1-031 trigger rules.
+
+PPV1-004C governs policy-evidence label availability after location eligibility has otherwise been established. It does not authorize synthesis of Inbox membership or any other provider mapping.
 
 - **PPV1-005 — Synchronization requirement:** TODO (Founder Approval Required): Define the minimum mailbox synchronization state required before an evaluation may be presented as current.
 - **PPV1-006 — Empty candidate behavior:** TODO (Founder Approval Required): Define the contract and user-facing meaning when no eligible candidates exist.
