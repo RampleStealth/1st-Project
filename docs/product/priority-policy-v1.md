@@ -338,7 +338,7 @@ The constitutional tier identifiers are:
 
   Eligible candidates shall not be omitted merely because they have no affirmative signal. Missing or unavailable metadata remains governed separately by PPV1-004 and must not be treated as equivalent to confirmed absence of evidence.
 
-Tier assignment must be deterministic. The engine must not emit confidence, inferred urgency, or an unapproved intermediate tier. PPV1-020 remains authoritative for the unresolved priority ordering of the approved identifiers.
+Tier assignment must be deterministic. The engine must not emit confidence, inferred urgency, or an unapproved intermediate tier. PPV1-020 is authoritative for the constitutional ordering of the approved identifiers.
 
 ## 6. Deterministic rule set
 
@@ -540,7 +540,41 @@ Implementations must not derive user-facing text from enum names. Codes and word
 
 Candidate ordering must be stable and fully deterministic. Database row order, provider response order, object-property order, locale defaults, and asynchronous completion order must never affect the result.
 
-- **PPV1-020 — Tier ordering:** TODO (Founder Approval Required): Define the descending order of approved tiers.
+- **PPV1-020 — Tier ordering:** Priority Policy v1 adopts the following strict descending constitutional tier order:
+  1. `NEEDS_ATTENTION`
+  2. `REVIEW_LATER`
+  3. `NO_IMMEDIATE_SIGNALS`
+
+  1. **Tier ordering:** The above order is the sole constitutional ordering of approved tiers. No implementation shall derive ordering from:
+     - declaration order;
+     - enum values;
+     - numeric values;
+     - scores;
+     - weights;
+     - confidence;
+     - heuristics;
+     - implementation-specific ordering.
+  2. **Conflict resolution:** After individual rule evaluation and any applicable correction handling under PPV1-025 through PPV1-027, PPV1-012 shall select the highest tier according to this constitutional order.
+  3. **No accumulation:** Multiple assigned tiers shall never accumulate or promote beyond the highest tier actually assigned by an approved constitutional rule.
+  4. **Collection grouping:** Primary collection grouping shall follow this constitutional tier order. Candidates within the same final tier remain governed exclusively by PPV1-021.
+  5. **Separation of concerns:** This ordering governs only:
+     - constitutional tier ordering;
+     - final-tier conflict resolution;
+     - primary collection grouping.
+
+     It shall not define:
+
+     - rule precedence;
+     - reason ordering;
+     - within-tier ordering;
+     - urgency;
+     - objective importance;
+     - certainty;
+     - confidence;
+     - required action.
+  6. **Future compatibility:** Any future Founder-approved tier shall require explicit placement within the constitutional ordering before implementation.
+
+  This ordering makes the approved tier semantics executable. It does not redefine those semantics.
 - **PPV1-021 — Within-tier comparator:** TODO (Founder Approval Required): Define the complete sequence of within-tier tie-breakers.
 - **PPV1-022 — Final identity tie-breaker:** TODO (Founder Approval Required): Approve the stable final identifier used when all policy evidence and timestamps are equal.
 - **PPV1-023 — Missing timestamp ordering:** TODO (Founder Approval Required): Define where candidates without a valid activity timestamp appear.
