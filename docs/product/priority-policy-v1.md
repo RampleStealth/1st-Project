@@ -114,7 +114,14 @@ The constitutional tier identifiers are:
 - `NO_IMMEDIATE_SIGNALS`
 
 - **PPV1-007 — Tier identifiers:** The identifiers above are the complete Priority Policy v1 tier registry. No implementation may introduce an additional tier under policy version `1.0`.
-- **PPV1-008 — Tier semantics:** TODO (Founder Approval Required): Define the evidence threshold and user-facing meaning of every tier.
+- **PPV1-008 — Tier semantics:** Priority Policy v1 uses rule-assigned evidence semantics:
+  - `NEEDS_ATTENTION`: At least one approved constitutional rule explicitly assigns the candidate to the highest attention tier.
+  - `REVIEW_LATER`: At least one approved constitutional rule assigns the candidate for later review, and no applicable rule assigns `NEEDS_ATTENTION`.
+  - `NO_IMMEDIATE_SIGNALS`: No approved constitutional rule assigns either higher tier, subject to active user-correction rules.
+
+  These tiers express evidence-based attention guidance. They do not claim urgency, objective importance, certainty, or required action.
+
+  PPV1-008 does not decide which signals map to which tiers. Signal mappings, combinations, correction mappings, and UI labels remain governed by their separate Founder decisions.
 - **PPV1-009 — Default tier:** TODO (Founder Approval Required): Define the tier assigned when a candidate has no affirmative policy signal and no user override.
 
 Tier assignment must be deterministic. The engine must not emit confidence, inferred urgency, or an unapproved intermediate tier. PPV1-020 remains authoritative for the unresolved priority ordering of the approved identifiers.
