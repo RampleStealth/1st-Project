@@ -252,7 +252,25 @@ Priority Policy v1 adopts three-state knowledge for owner-scoped user-override m
 
 Tier evaluation may proceed from available evidence while override metadata is Unknown, but the result must remain truthfully qualified through collection-level disclosure.
 
-- **PPV1-005 — Synchronization requirement:** TODO (Founder Approval Required): Define the minimum mailbox synchronization state required before an evaluation may be presented as current.
+- **PPV1-005 — Synchronization requirement:** Priority Policy v1 adopts an explicit synchronization-readiness boundary with truthful partial-result support.
+
+  1. **Synchronization-ready:** A collection may be described as synchronization-ready only when an authoritative synchronization checkpoint establishes complete PPV1-001 candidate-location coverage for the normalized snapshot being evaluated. All known provider changes through that checkpoint must be durably reflected or explicitly represented as unresolved.
+  2. **Partial synchronization:** Deterministic evaluation may proceed for candidates already represented in a partial snapshot. Partial results may be presented only when explicitly identified as partial. They shall never be described as:
+     - complete candidate coverage;
+     - current complete mailbox evaluation;
+     - evidence that every eligible candidate was evaluated.
+  3. **Eligibility preservation:** Partial synchronization does not make undiscovered candidates ineligible. Batching, pagination, streaming, parallelization, and progressive delivery shall not redefine PPV1-001 or PPV1-002B.
+  4. **Evidence completeness:** Missing timestamp, label, or override evidence within a known candidate does not automatically make candidate coverage synchronization-unready. Those field-level limitations remain governed by PPV1-004 and disclosed separately through PPV1-035.
+  5. **Freshness separation:** Synchronization readiness establishes coverage integrity at a checkpoint. It does not establish how long that checkpoint may be called current. PPV1-030 through PPV1-033 remain responsible for validity, recalculation, stale presentation, and caching.
+  6. **Provider unavailability:** A previously synchronization-ready snapshot does not become partial solely because the provider becomes temporarily unavailable. Whether that snapshot may still be presented, and whether it may be called current, remains governed by future freshness and stale-presentation rules.
+  7. **Collection disclosure:** PPV1-035 shall distinguish:
+     - synchronization-ready coverage;
+     - partial synchronization coverage;
+     - field-level incomplete evidence.
+
+     The exact public field names, shape, and serialization remain governed by PPV1-035.
+
+  The evaluator may produce a valid deterministic result over the exact inputs supplied while the collection remains partial. Validity of an individual deterministic calculation does not imply complete candidate coverage.
 - **PPV1-006 — Empty candidate behavior:** TODO (Founder Approval Required): Define the contract and user-facing meaning when no eligible candidates exist.
 
 Candidate selection must be deterministic. Given the same normalized projection, evaluation instant, and approved scope, candidate membership must be identical.
