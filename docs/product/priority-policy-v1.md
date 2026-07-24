@@ -29,8 +29,9 @@ Its purpose is to establish constitutional guarantees that remain stable across 
 5. [Priority tiers](#5-priority-tiers)
 6. [Deterministic rule set](#6-deterministic-rule-set)
    1. [Signal classification](#61-signal-classification)
-   2. [Provider Mapping](#62-provider-mapping)
-   3. [AI Independence](#63-ai-independence)
+   2. [Recency](#62-recency)
+   3. [Provider Mapping](#63-provider-mapping)
+   4. [AI Independence](#64-ai-independence)
 7. [Reason codes](#7-reason-codes)
 8. [Ordering rules](#8-ordering-rules)
 9. [Future timestamp handling](#9-future-timestamp-handling)
@@ -128,11 +129,10 @@ Available normalized evidence includes:
 
 Availability does not authorize a field as a ranking signal. The exact operative rules remain unresolved:
 
-- **PPV1-010 — Remaining signal decisions:** TODO (Founder Approval Required): Identify which available metadata fields other than Manual user star are operative Priority Policy v1 signals.
+- **PPV1-010 — Remaining signal decisions:** TODO (Founder Approval Required): Identify which available metadata fields other than Manual user star and Recency are operative Priority Policy v1 signals.
 - **PPV1-010A — Provider-Verifiable Signal Origin:** Every approved signal must have a provider-verifiable origin. Signals whose origin cannot be distinguished from provider inference or AI classification are not constitutional inputs to Priority Policy.
 - **PPV1-011 — Rule-to-tier mapping:** TODO (Founder Approval Required): Define the tier produced by each individual approved signal.
 - **PPV1-012 — Combined-signal behavior:** TODO (Founder Approval Required): Define how simultaneous signals combine, including precedence, promotion, and whether combinations change tier.
-- **PPV1-013 — Recency threshold:** TODO (Founder Approval Required): Define the exact duration and boundary semantics for any recency rule.
 - **PPV1-014 — Attachment treatment:** TODO (Founder Approval Required): State explicitly whether attachment presence affects Priority Policy v1 or is projection metadata only.
 - **PPV1-015 — Sender and recipient treatment:** TODO (Founder Approval Required): State explicitly whether normalized addresses affect Priority Policy v1 or are projection metadata only.
 
@@ -154,8 +154,9 @@ The caller must supply a fixed `evaluatedAt` instant. Identical policy inputs, i
 | Signal | Founder Status | Constitutional Basis |
 | --- | --- | --- |
 | Manual user star | Approved | A manually applied star is an explicit user action and therefore satisfies the constitutional requirements of objective, deterministic, and user-verifiable evidence. |
+| Recency | Approved | Recency provides objective temporal context. It does not represent importance and cannot promote a tier by itself. |
 
-Approval as a signal does not resolve its tier mapping, reason code, human-readable wording, or ordering precedence. Those decisions remain governed by PPV1-011, PPV1-016, PPV1-017, and PPV1-018.
+Approval as a signal does not resolve its tier mapping, reason code, human-readable wording, parameter values, or ordering precedence. Those decisions remain governed by PPV1-011, PPV1-012, PPV1-016, PPV1-017, PPV1-018, and the unresolved Recency parameters below.
 
 #### Not approved signals
 
@@ -163,7 +164,44 @@ Approval as a signal does not resolve its tier mapping, reason code, human-reada
 | --- | --- | --- |
 | Manual/provider importance | Not Approved | A provider importance signal is approved only if its origin can be verified as an explicit user action. If the implementation cannot distinguish user-applied importance from provider-generated importance, the signal shall not participate in Priority Policy. |
 
-### 6.2 Provider Mapping
+### 6.2 Recency
+
+- **PPV1-013 — Constitutional role of Recency:** Recency is an approved deterministic signal. Its purpose is to provide objective temporal context. Recency does not represent importance.
+- **PPV1-013A — Recency Represents Time:** Recency tells time, not importance. Priority Policy shall treat recency solely as objective temporal evidence. Importance shall never be inferred from recency alone.
+- **PPV1-013B — No Tier Promotion:** Recency alone shall never increase an email's Priority Policy tier. It may participate only according to the deterministic constitutional rules.
+- **PPV1-013C — Explicit User Intent Dominance:** Explicit user actions always take precedence over passive metadata.
+
+  Examples of explicit actions include:
+
+  - Manual Star
+  - User Override
+  - Future Founder-approved manual controls
+
+  Examples of passive metadata include:
+
+  - Timestamp
+  - Arrival order
+  - Provider-generated metadata
+
+  Passive metadata shall not override explicit user intent.
+
+- **PPV1-013D — Deterministic Ordering:** When two candidates are otherwise constitutionally equal, recency may be used solely as a deterministic ordering rule. It shall not create, modify, or elevate Priority Policy tiers.
+
+#### Time and Importance
+
+Priority Policy separates objective temporal facts from constitutional attention decisions.
+
+Time describes when an event occurred.
+
+Importance is not inferred from time.
+
+Recency may provide temporal context and deterministic ordering only within the constitutional boundaries above.
+
+**Recency parameter values:** TODO (Founder Approval Required): Define the Recency window, number of hours, lookback duration, and exact boundary semantics.
+
+Freshness thresholds and cache duration remain unresolved under PPV1-030 and PPV1-033. The Constitution defines the role of Recency before defining its parameter values.
+
+### 6.3 Provider Mapping
 
 Priority Policy operates exclusively on provider-neutral normalized signals.
 
@@ -173,7 +211,7 @@ The provider-neutral mapping contract will be defined in [`docs/product/provider
 
 **TODO (Future Specification):** Create and approve `docs/product/provider-mapping-spec-v1.md`.
 
-### 6.3 AI Independence
+### 6.4 AI Independence
 
 No AI component may directly assign, modify, or reorder Priority Policy tiers.
 
@@ -404,6 +442,7 @@ The document structure, philosophy, design promise, deterministic/non-AI boundar
 
 | Version | Status | Date | Decision owner | Change |
 | --- | --- | --- | --- | --- |
+| 1.0 | Approved amendment | 2026-07-24 | Founder | Recorded Founder Design Session #4 decisions defining Recency as objective temporal evidence, prohibiting tier promotion from Recency alone, preserving explicit user-intent precedence, and permitting Recency only as a deterministic tie-breaker when candidates are otherwise constitutionally equal. |
 | 1.0 | Approved amendment | 2026-07-24 | Founder | Recorded Founder Design Session #3 decisions for Manual user star, provider-verifiable signal origin, missing-metadata fallbacks, candidate-count scalability, provider neutrality, explicit User Override, and AI independence. |
 | 1.0 | Approved | Pending PPV1-047 | Founder | Established the repository source of truth under FD-001. Unresolved policy decisions are enumerated for Founder review before executable implementation. |
 
