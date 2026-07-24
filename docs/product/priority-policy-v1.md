@@ -113,7 +113,15 @@ The exact scope remains unresolved:
   The constitutional policy consumes provider-neutral normalized location membership; Gmail-specific labels remain adapter concerns.
 - **PPV1-002 — Maximum candidate count:** The policy defines no maximum candidate count. Implementations may batch, paginate, stream, parallelize, or otherwise optimize evaluation provided every eligible candidate remains eligible for deterministic evaluation.
   - **PPV1-002A — Time-to-first-result guarantee:** TODO (Founder Approval Required): Define the maximum permitted time before the first eligible deterministic result is available.
-  - **PPV1-002B — Candidate lookback duration:** TODO (Founder Approval Required): Define whether candidate eligibility has a maximum lookback duration and, if so, its exact boundary semantics.
+  - **PPV1-002B — Candidate lookback duration:** Priority Policy v1 establishes no temporal lookback limit. Every thread satisfying PPV1-001 location eligibility remains constitutionally eligible regardless of age.
+
+    Priority Policy v1 defines no age-based eligibility cutoff and no maximum candidate count. Constitutional eligibility is determined independently of implementation strategy.
+
+    Batching, pagination, streaming, parallelization, caching, and progressive delivery shall never redefine candidate eligibility.
+
+    Recency affects deterministic ordering only and never determines eligibility. Users naturally control candidate scope through current Inbox membership. Archived-only threads remain governed by PPV1-001 and remain outside the candidate set.
+
+    PPV1-002A remains a separate operational guarantee.
 - **PPV1-003 — Candidate timestamp:** TODO (Founder Approval Required): Define which normalized timestamp determines whether a thread is inside the candidate window.
 - **PPV1-004 — Missing metadata fallback:** Missing metadata must never be inferred. Each missing field follows the approved deterministic behavior below.
 
