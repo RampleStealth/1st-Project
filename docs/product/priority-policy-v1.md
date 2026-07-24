@@ -138,7 +138,7 @@ The exact scope remains unresolved:
   | Missing Metadata | Deterministic Behavior | Founder Status |
   | --- | --- | --- |
   | Candidate timestamp (`PPV1-004A`) | Retain the candidate with an Unknown temporal state; apply no temporal effect. | Approved |
-  | Sender (`PPV1-004B`) | TODO (Founder Approval Required) | Pending |
+  | Sender (`PPV1-004B`) | Preserve independent Unknown states for display name and address; apply no policy effect. | Approved |
   | Labels (`PPV1-004C`) | TODO (Founder Approval Required) | Pending |
   | User overrides (`PPV1-004D`) | TODO (Founder Approval Required) | Pending |
 
@@ -167,6 +167,27 @@ When an otherwise eligible candidate has no valid PPV1-003 candidate timestamp:
 6. **Truthful disclosure:** A collection containing one or more candidates with missing candidate timestamps shall disclose incomplete temporal evidence through the future PPV1-035 collection envelope. PPV1-035 remains responsible for the exact field names, shape, and serialization.
 
 Tier evaluation may remain constitutionally valid when temporal evidence is incomplete. The disclosure communicates the limitation affecting temporal comparison and presentation; it does not imply that every tier result is invalid.
+
+### PPV1-004B — Missing sender
+
+Priority Policy v1 adopts independent Unknown states for sender display name and sender address.
+
+1. **Candidate retention:** Missing or malformed sender metadata shall never exclude an otherwise eligible candidate.
+2. **Independent normalization:** Sender display name and sender address are evaluated independently. Each field preserves its own verified state. A missing or malformed field does not invalidate another independently verified field.
+3. **Unknown preservation:** Missing or malformed sender fields remain Unknown. No identity may be guessed, synthesized, inferred, or fabricated. Prohibited substitutions include:
+   - `"Unknown Sender"` as factual identity;
+   - mailbox-owner identity;
+   - empty address as verified address;
+   - guessed email addresses;
+   - malformed provider values treated as normalized identity.
+4. **No constitutional evaluation effect:** Missing sender metadata:
+   - does not affect eligibility;
+   - does not affect ordering;
+   - does not assign or modify tiers;
+   - emits no reasons;
+   - provides no affirmative or negative evidence.
+5. **Presentation:** Presentation layers may display neutral interface text indicating unavailable sender information. Presentation fallback is interface copy only. It is not normalized sender identity, constitutional evidence, or provider metadata.
+6. **Collection disclosure:** Because sender is non-operative in Priority Policy v1, missing sender metadata requires no collection-level incomplete-evidence disclosure. Future sender-based constitutional rules remain governed by PPV1-015 and future amendments.
 
 - **PPV1-005 — Synchronization requirement:** TODO (Founder Approval Required): Define the minimum mailbox synchronization state required before an evaluation may be presented as current.
 - **PPV1-006 — Empty candidate behavior:** TODO (Founder Approval Required): Define the contract and user-facing meaning when no eligible candidates exist.
