@@ -683,7 +683,29 @@ During evaluation, if a provider timestamp is later than the fixed `evaluatedAt`
 
 The evaluator must not rewrite the persisted provider timestamp and must not use the current system clock implicitly.
 
-- **PPV1-024 — Excessive future skew:** TODO (Founder Approval Required): Define whether a timestamp beyond a specific future-skew tolerance remains eligible, is treated as missing, or produces a diagnostic condition.
+- **PPV1-024 — Excessive future skew:** Priority Policy v1 defines a single explicit future-skew tolerance parameter.
+
+  **Future-skew tolerance duration:** TODO (Founder Approval Required): Approve the exact duration. The implementation shall not invent, default, or hard-code a duration before that approval.
+
+  1. **Within tolerance:** A valid provider-confirmed candidate timestamp later than `evaluatedAt` but not beyond the approved future-skew tolerance remains valid temporal evidence. For PPV1-021 ordering, its effective timestamp is `evaluatedAt`. The original provider timestamp remains unchanged.
+  2. **Beyond tolerance:** A candidate timestamp strictly later than `evaluatedAt` plus the approved tolerance is excessive future skew. For constitutional temporal evaluation, it becomes Unknown.
+  3. **Candidate behavior:** Excessive future skew:
+     - does not affect eligibility;
+     - does not assign or change a tier;
+     - emits no reason;
+     - does not rewrite provider metadata.
+
+     PPV1-023 governs within-tier placement.
+  4. **Disclosure:** Collections containing excessive-future-skew candidates shall disclose incomplete temporal evidence through PPV1-035.
+  5. **Recalculation:** PPV1-031 shall govern reevaluation when:
+     - `evaluatedAt` advances;
+     - provider timestamp metadata changes; or
+     - the approved tolerance changes in a future policy version.
+  6. **Boundary semantics:** Once the duration is approved:
+     - timestamps at exactly `evaluatedAt` plus the tolerance remain valid;
+     - timestamps strictly beyond that boundary become Unknown.
+
+  The constitutional excessive-future-skew rule is approved. The exact future-skew tolerance duration remains unresolved and must not be inferred.
 
 ## 10. User overrides
 
