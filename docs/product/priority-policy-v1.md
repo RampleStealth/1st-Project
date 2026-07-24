@@ -170,7 +170,7 @@ Availability does not authorize a field as a ranking signal. The exact operative
   2. **Correction handling:** Active user corrections are resolved under PPV1-025 through PPV1-027 before ordinary rule conflict resolution.
   3. **Final tier assignment:** After correction handling, the final tier is the constitutionally highest tier actually assigned by an applicable approved rule.
   4. **No accumulation:** Multiple signals shall not accumulate, add weight, or combine into a higher tier merely because they coexist. A combination may produce a distinct or higher tier only when a separate Founder-approved constitutional combination rule explicitly assigns that outcome.
-  5. **Reasons:** Reasons remain governed by PPV1-018 and PPV1-019. This decision does not determine whether lower-tier supporting reasons remain visible in a higher-tier result.
+  5. **Reasons:** Reasons remain governed by PPV1-018 and PPV1-019. PPV1-019 determines the visibility of lower-tier supporting reasons in a higher-tier result.
 
   Current approved example:
 
@@ -309,7 +309,23 @@ The applicable Active User Correction reason or reasons remain governed by the u
 
 This ordering preserves the constitutional rule that explicit user intent outranks passive metadata.
 
-- **PPV1-019 — Negative reasons:** TODO (Founder Approval Required): Define whether the contract exposes reasons for a lower-priority result or only affirmative evidence.
+### PPV1-019 — Negative reasons
+
+Priority Policy v1 shall retain all applicable authorized affirmative evidence reasons and all active explicit user-correction reasons, including lower-tier supporting reasons, even when another rule determines the final tier.
+
+1. **Affirmative evidence:** An authorized reason may be emitted only when its Founder-approved constitutional condition is satisfied.
+2. **Explicit corrections:** An explicit user-correction reason may be emitted only after its mapping, active-state semantics, precedence, lifetime, and undo behavior are Founder-approved. `USER_NOT_IMPORTANT` remains registered but non-operative until PPV1-026 and its dependencies are approved.
+3. **Supporting reasons:** A reason associated with a lower individually assigned tier may remain visible when a higher tier wins. Supporting reasons must not be represented as though each one independently determined the final tier.
+4. **Prohibited negative inference:** Never emit reasons inferred from absent signals or passive negative conclusions. Prohibited examples include:
+   - `NOT_STARRED`
+   - `NOT_RECENT`
+   - `NOT_IMPORTANT`
+   - `SAFE_TO_IGNORE`
+   - `NO_ATTENTION_NEEDED`
+
+   Absence of evidence shall not become negative evidence.
+5. **Ordering and deduplication:** Reasons shall be deduplicated and ordered under PPV1-018.
+6. **Recency:** `RECENCY` remains registered but inactive and shall not be emitted under the currently approved policy.
 
 Implementations must not derive user-facing text from enum names. Codes and wording are separate contract fields.
 
