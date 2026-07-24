@@ -575,7 +575,44 @@ Candidate ordering must be stable and fully deterministic. Database row order, p
   6. **Future compatibility:** Any future Founder-approved tier shall require explicit placement within the constitutional ordering before implementation.
 
   This ordering makes the approved tier semantics executable. It does not redefine those semantics.
-- **PPV1-021 — Within-tier comparator:** TODO (Founder Approval Required): Define the complete sequence of within-tier tie-breakers.
+- **PPV1-021 — Within-tier comparator:** Priority Policy v1 adopts the following lexicographic within-tier comparator. This comparator applies only after final tier assignment and primary tier grouping under PPV1-020.
+
+  1. **Timestamp availability:** Apply PPV1-023 to determine the placement of candidates whose PPV1-003 candidate timestamp is missing relative to candidates with valid timestamps. PPV1-021 does not resolve that placement.
+  2. **Effective candidate timestamp:** For ordering only, derive the effective timestamp using the caller-supplied fixed `evaluatedAt`:
+     - candidate timestamp at or before `evaluatedAt` → use the verified candidate timestamp;
+     - candidate timestamp after `evaluatedAt` → use `evaluatedAt`, preserving the approved age-zero treatment.
+
+     This evaluation-only comparison key shall not rewrite, normalize, or replace the persisted provider-confirmed timestamp.
+  3. **Temporal direction:** Among candidates with valid effective timestamps, sort in descending order:
+     - newest verified incoming work first;
+     - older verified incoming work later.
+  4. **Final identity tie-breaker:** When effective timestamps are equal, apply the future PPV1-022 stable identity comparator.
+  5. **Prohibited comparators:** Within-tier ordering shall not use:
+     - sender;
+     - subject;
+     - recipients;
+     - attachment state;
+     - reason count;
+     - rule count;
+     - label count;
+     - provider response order;
+     - synchronization order;
+     - database row order;
+     - insertion order;
+     - local created or updated timestamps;
+     - scores;
+     - weights;
+     - confidence;
+     - AI inference.
+  6. **Constitutional boundaries:** The within-tier comparator:
+     - does not affect eligibility;
+     - does not assign or change tiers;
+     - does not create reasons;
+     - does not alter rule precedence;
+     - does not imply importance, urgency, or required action.
+  7. **Deterministic replay:** Identical constitutional candidate inputs and an identical `evaluatedAt` shall produce identical ordering once PPV1-022 and PPV1-023 are approved.
+
+  PPV1-024 remains responsible for excessive future-skew policy. This decision applies only the already approved age-zero treatment to the ordering comparison key and does not resolve PPV1-024's remaining behavior.
 - **PPV1-022 — Final identity tie-breaker:** TODO (Founder Approval Required): Approve the stable final identifier used when all policy evidence and timestamps are equal.
 - **PPV1-023 — Missing timestamp ordering:** TODO (Founder Approval Required): Define where candidates without a valid activity timestamp appear.
 
