@@ -122,7 +122,17 @@ The exact scope remains unresolved:
     Recency affects deterministic ordering only and never determines eligibility. Users naturally control candidate scope through current Inbox membership. Archived-only threads remain governed by PPV1-001 and remain outside the candidate set.
 
     PPV1-002A remains a separate operational guarantee.
-- **PPV1-003 — Candidate timestamp:** TODO (Founder Approval Required): Define which normalized timestamp determines whether a thread is inside the candidate window.
+- **PPV1-003 — Candidate timestamp:** The candidate timestamp is the latest valid provider-confirmed timestamp from a verifiably incoming message in the thread.
+
+  1. **Incoming activity:** A newly received incoming message may advance the candidate timestamp.
+  2. **User-authored activity:** Sent replies, draft creation, draft updates, and other owner-authored message activity shall not advance the candidate timestamp.
+  3. **Provider and local metadata:** Provider history identifiers, synchronization timestamps, watch-renewal timestamps, local `created_at` timestamps, local `updated_at` timestamps, and projection-write timestamps are not candidate timestamps.
+  4. **Verified direction:** Message direction must come from provider-verifiable normalized metadata. If direction cannot be verified, the implementation shall not infer that the message is incoming.
+  5. **Missing timestamp:** If no valid incoming-message timestamp exists, the candidate timestamp is missing. PPV1-004A and PPV1-023 govern the resulting behavior.
+  6. **No synthesis:** The implementation shall not synthesize a candidate timestamp from unrelated or locally generated fields.
+  7. **Future timestamps:** Future timestamp handling remains governed by the existing age-zero rule and PPV1-024.
+
+  The candidate timestamp affects deterministic ordering and future approved temporal rules only. It does not affect eligibility under PPV1-002B.
 - **PPV1-004 — Missing metadata fallback:** Missing metadata must never be inferred. Each missing field follows the approved deterministic behavior below.
 
   | Missing Metadata | Deterministic Behavior | Founder Status |
@@ -172,7 +182,7 @@ The evaluator may consume only normalized metadata already available from the ma
 Available normalized evidence includes:
 
 - Gmail system-label presence, including `UNREAD`, `STARRED`, `IMPORTANT`, and `INBOX`
-- normalized thread activity timestamp
+- normalized candidate timestamp defined by PPV1-003
 - normalized sender and recipient addresses
 - thread-level attachment presence
 - owner-scoped user override metadata when that contract is implemented
