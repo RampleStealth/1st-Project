@@ -586,7 +586,7 @@ Candidate ordering must be stable and fully deterministic. Database row order, p
   3. **Temporal direction:** Among candidates with valid effective timestamps, sort in descending order:
      - newest verified incoming work first;
      - older verified incoming work later.
-  4. **Final identity tie-breaker:** When effective timestamps are equal, apply the future PPV1-022 stable identity comparator.
+  4. **Final identity tie-breaker:** When effective timestamps are equal, apply the PPV1-022 stable identity comparator.
   5. **Prohibited comparators:** Within-tier ordering shall not use:
      - sender;
      - subject;
@@ -610,10 +610,43 @@ Candidate ordering must be stable and fully deterministic. Database row order, p
      - does not create reasons;
      - does not alter rule precedence;
      - does not imply importance, urgency, or required action.
-  7. **Deterministic replay:** Identical constitutional candidate inputs and an identical `evaluatedAt` shall produce identical ordering once PPV1-022 and PPV1-023 are approved.
+  7. **Deterministic replay:** Identical constitutional candidate inputs and an identical `evaluatedAt` shall produce identical ordering once PPV1-023 is approved.
 
   PPV1-024 remains responsible for excessive future-skew policy. This decision applies only the already approved age-zero treatment to the ordering comparison key and does not resolve PPV1-024's remaining behavior.
-- **PPV1-022 — Final identity tie-breaker:** TODO (Founder Approval Required): Approve the stable final identifier used when all policy evidence and timestamps are equal.
+- **PPV1-022 — Final identity tie-breaker:** Priority Policy v1 uses the immutable owner-scoped application `threadId` as the final non-semantic tie-breaker.
+
+  1. **Identity:** `threadId` shall be:
+     - application-owned;
+     - owner-scoped;
+     - immutable for the lifetime of the logical thread projection;
+     - provider-neutral;
+     - distinct from any raw provider identifier.
+  2. **Comparator:** Compare `threadId` values using their canonical UUID 16-byte representation in unsigned ascending byte order. The implementation shall not use:
+     - locale-sensitive string comparison;
+     - database default collation;
+     - case folding;
+     - provider identifier ordering;
+     - insertion order;
+     - synchronization order;
+     - database row order;
+     - runtime iteration order.
+  3. **Comparator position:** The `threadId` comparator runs only after PPV1-020 tier ordering and every preceding PPV1-021 within-tier comparison are equal.
+  4. **No semantic meaning:** The `threadId` value carries no constitutional or user-facing meaning. It shall not affect:
+     - eligibility;
+     - tier assignment;
+     - reasons;
+     - rule precedence;
+     - timestamp ordering;
+     - importance;
+     - urgency.
+  5. **Stability:** The application shall preserve the same owner-scoped `threadId` across ordinary synchronization and projection updates.
+  6. **Invalid input:** An absent or malformed constitutional `threadId` is invalid evaluator input. The evaluator shall fail safely. It shall not:
+     - generate a replacement UUID;
+     - fall back to a provider ID;
+     - derive an identity from sender or subject;
+     - use database or runtime ordering.
+
+  PPV1-022 exists solely to complete a deterministic total order when all higher-order constitutional comparators are equal.
 - **PPV1-023 — Missing timestamp ordering:** TODO (Founder Approval Required): Define where candidates without a valid activity timestamp appear.
 
 Until these decisions are approved, an ordered multi-candidate Attention response must not be implemented.
