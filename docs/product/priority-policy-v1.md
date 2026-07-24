@@ -271,7 +271,44 @@ Tier evaluation may proceed from available evidence while override metadata is U
      The exact public field names, shape, and serialization remain governed by PPV1-035.
 
   The evaluator may produce a valid deterministic result over the exact inputs supplied while the collection remains partial. Validity of an individual deterministic calculation does not imply complete candidate coverage.
-- **PPV1-006 — Empty candidate behavior:** TODO (Founder Approval Required): Define the contract and user-facing meaning when no eligible candidates exist.
+- **PPV1-006 — Empty candidate behavior:** Priority Policy v1 adopts status-qualified empty collections.
+
+  1. **Synchronization-ready empty evaluation:** A collection may state that it contains zero eligible candidates only when:
+     - PPV1-005 synchronization-ready coverage is established;
+     - the complete PPV1-001 candidate scope is represented at the authoritative checkpoint;
+     - zero candidates satisfy that scope; and
+     - applicable freshness and stale-presentation rules permit the snapshot to be presented as current.
+  2. **Constitutional meaning:** A synchronization-ready empty result means only:
+
+     > No candidates satisfy the approved Priority Policy candidate scope in this synchronization-ready snapshot.
+
+     It shall not mean or imply:
+
+     - the mailbox is empty;
+     - no email is important;
+     - no email requires human judgment;
+     - archived mail is empty;
+     - Sent is empty;
+     - Drafts are empty;
+     - Spam is empty;
+     - Trash is empty;
+     - the user has no work.
+  3. **Partial synchronization:** Zero currently represented candidates in a partial snapshot is a partial empty result. It is not proof that zero eligible candidates exist. It must remain explicitly identified as partial.
+  4. **Provider unavailable or stale:** Provider unavailability and stale coverage are not empty candidate results. PPV1-032 remains responsible for whether a previously ready snapshot may remain visible.
+  5. **Contract behavior:** Return an empty candidate collection together with truthful:
+     - readiness metadata;
+     - freshness metadata;
+     - candidate-scope metadata;
+     - evidence-completeness metadata.
+
+     PPV1-034 and PPV1-035 remain responsible for exact public representation. Do not create:
+
+     - fabricated candidates;
+     - synthetic reasons;
+     - transport-level absence as a substitute for constitutional state.
+  6. **Presentation:** PPV1-039 remains responsible for exact user-facing wording for synchronization-ready empty, partial empty, stale, and unavailable states.
+
+  The evaluator may deterministically return zero items for the exact inputs supplied. That fact alone does not prove complete candidate coverage or mailbox emptiness.
 
 Candidate selection must be deterministic. Given the same normalized projection, evaluation instant, and approved scope, candidate membership must be identical.
 
