@@ -375,7 +375,7 @@ Availability does not authorize a field as a ranking signal. The exact operative
 - **PPV1-012 — Combined-signal behavior:** Highest assigned tier wins, with no combinational promotion.
   1. **Individual rule evaluation:** Each applicable approved constitutional rule evaluates independently and may produce only its Founder-approved tier assignment and authorized reason.
   2. **Correction handling:** Active user corrections are resolved under PPV1-025 through PPV1-027 before ordinary rule conflict resolution.
-  3. **Final tier assignment:** After correction handling, the final tier is the constitutionally highest tier actually assigned by an applicable approved rule.
+  3. **Final tier assignment:** PPV1-027 determines whether exactly one verified active correction fixes the final tier. When authoritative correction state confirms that no active correction exists, the final tier is the constitutionally highest tier actually assigned by an applicable approved ordinary rule.
   4. **No accumulation:** Multiple signals shall not accumulate, add weight, or combine into a higher tier merely because they coexist. A combination may produce a distinct or higher tier only when a separate Founder-approved constitutional combination rule explicitly assigns that outcome.
   5. **Reasons:** Reasons remain governed by PPV1-018 and PPV1-019. PPV1-019 determines the visibility of lower-tier supporting reasons in a higher-tier result.
 
@@ -554,7 +554,7 @@ Candidate ordering must be stable and fully deterministic. Database row order, p
      - confidence;
      - heuristics;
      - implementation-specific ordering.
-  2. **Conflict resolution:** After individual rule evaluation and any applicable correction handling under PPV1-025 through PPV1-027, PPV1-012 shall select the highest tier according to this constitutional order.
+  2. **Conflict resolution:** After individual rule evaluation and correction handling under PPV1-025 through PPV1-027, PPV1-012 shall select the highest ordinary-rule tier according to this constitutional order only when no verified active correction fixes the final tier.
   3. **No accumulation:** Multiple assigned tiers shall never accumulate or promote beyond the highest tier actually assigned by an approved constitutional rule.
   4. **Collection grouping:** Primary collection grouping shall follow this constitutional tier order. Candidates within the same final tier remain governed exclusively by PPV1-021.
   5. **Separation of concerns:** This ordering governs only:
@@ -769,7 +769,47 @@ The persistence and product workflow for corrections are outside the current imp
   6. **Wording:** PPV1-017A remains responsible for the localization key and canonical Founder-approved English wording.
 
   `NO_IMMEDIATE_SIGNALS` in this case results from the user's explicit correction. It does not represent absence of evidence and must remain distinguishable from the PPV1-009 default outcome through `USER_NOT_IMPORTANT`.
-- **PPV1-027 — Override precedence:** TODO (Founder Approval Required): Define how each override interacts with every automated signal and tier.
+- **PPV1-027 — Override precedence:** Priority Policy v1 adopts exclusive active-correction dominance.
+
+  1. **Authoritative correction resolution:** Resolve the authoritative owner-scoped correction state before ordinary final-tier conflict resolution.
+  2. **Exactly one verified active correction:** When exactly one verified active correction exists:
+     - **Prioritize:**
+       - fixes the final tier at `NEEDS_ATTENTION`;
+       - emits `USER_PRIORITIZE`.
+     - **Not Important:**
+       - fixes the final tier at `NO_IMMEDIATE_SIGNALS`;
+       - emits `USER_NOT_IMPORTANT`.
+
+     The correction-assigned tier is final while that correction remains active.
+  3. **Ordinary constitutional rules:** Ordinary rules continue evaluating so that all applicable authorized evidence remains truthfully available as supporting reasons. Ordinary rules shall not alter the correction-assigned final tier.
+  4. **No verified active correction:** When authoritative correction state confirms that no active correction exists, ordinary rules determine the final tier under PPV1-012.
+  5. **Conflicting or ambiguous correction state:** Correction state becomes Unknown under PPV1-004D if:
+     - Prioritize and Not Important are both active;
+     - correction state is internally contradictory;
+     - correction authority cannot be determined; or
+     - correction metadata is otherwise ambiguous.
+
+     In that state:
+
+     - apply no correction mapping;
+     - continue evaluating all correction-independent rules;
+     - disclose incomplete user-correction evidence through PPV1-035;
+     - do not infer which correction is newer, stronger, or intended.
+  6. **Reasons:** All authorized applicable reasons remain governed by PPV1-019. Reason ordering remains governed by PPV1-018, with the active correction reason first when exactly one verified active correction exists. Supporting reasons must not be presented as though they determined the final tier.
+  7. **Prohibited precedence mechanisms:** The implementation shall not resolve correction conflicts through:
+     - highest tier wins;
+     - latest timestamp wins;
+     - database row order;
+     - insertion order;
+     - synchronization order;
+     - provider order;
+     - AI inference;
+     - heuristics;
+     - confidence;
+     - scoring.
+  8. **Lifecycle:** PPV1-028 remains responsible for when a correction is active. PPV1-029 remains responsible for Undo semantics. PPV1-031 shall require reevaluation whenever authoritative correction state changes.
+
+  Verified user intent governs the final attention tier. It does not erase independently verified constitutional evidence.
 - **PPV1-028 — Override lifetime:** TODO (Founder Approval Required): Define whether corrections expire, survive archive/read changes, or remain until Undo.
 - **PPV1-029 — Undo semantics:** TODO (Founder Approval Required): Define the state restored by Undo and whether historical correction records remain auditable.
 
