@@ -149,7 +149,22 @@ Availability does not authorize a field as a ranking signal. The exact operative
 
 - **PPV1-010 — Remaining signal decisions:** TODO (Founder Approval Required): Identify which available metadata fields other than Manual user star and Recency are operative Priority Policy v1 signals.
 - **PPV1-010A — Provider-Verifiable Signal Origin:** Every approved signal must have a provider-verifiable origin. Signals whose origin cannot be distinguished from provider inference or AI classification are not constitutional inputs to Priority Policy.
-- **PPV1-011 — Rule-to-tier mapping:** TODO (Founder Approval Required): Define the tier produced by each individual approved signal.
+- **PPV1-011 — Rule-to-tier mapping:** Individual constitutional signals map as follows:
+  - **Provider-verifiable Manual Star**
+    - `tier`: `REVIEW_LATER`
+    - `reasonCode`: `MANUAL_STAR`
+
+    A Manual Star is explicit, user-verifiable intent that the candidate should remain visible for review. A Manual Star does not necessarily mean urgency, immediate action, or a request to begin with that candidate. Therefore, Manual Star elevates the candidate above `NO_IMMEDIATE_SIGNALS` but does not independently assign `NEEDS_ATTENTION`.
+  - **Recency alone**
+    - `tier`: `NO_IMMEDIATE_SIGNALS`
+    - `reasonCodes`: `[]`
+    - `reasons`: `[]`
+
+    Recency tells time, not importance. Recency alone does not promote a tier and does not constitute a reason for the assigned tier. Recency may be used only as a deterministic ordering rule among otherwise constitutionally equal candidates.
+
+  Do not emit `RECENCY` merely because a valid timestamp exists. The `RECENCY` reason code remains registered but inactive unless a future Founder-approved rule gives it an explanatory constitutional condition.
+
+  `NEEDS_ATTENTION` remains available for explicit correction mappings or other future Founder-approved rules. This decision does not resolve combined-signal behavior, corrections, missing metadata, or provider-specific mappings.
 - **PPV1-012 — Combined-signal behavior:** TODO (Founder Approval Required): Define how simultaneous signals combine, including precedence, promotion, and whether combinations change tier.
 - **PPV1-014 — Attachment treatment:** TODO (Founder Approval Required): State explicitly whether attachment presence affects Priority Policy v1 or is projection metadata only.
 - **PPV1-015 — Sender and recipient treatment:** TODO (Founder Approval Required): State explicitly whether normalized addresses affect Priority Policy v1 or are projection metadata only.
@@ -174,7 +189,7 @@ The caller must supply a fixed `evaluatedAt` instant. Identical policy inputs, i
 | Manual user star | Approved | A manually applied star is an explicit user action and therefore satisfies the constitutional requirements of objective, deterministic, and user-verifiable evidence. |
 | Recency | Approved | Recency provides objective temporal context. It does not represent importance and cannot promote a tier by itself. |
 
-Approval as a signal does not resolve its tier mapping, emission condition, canonical human-readable wording, or parameter values. Those decisions remain governed by PPV1-011, PPV1-012, PPV1-017A, and the unresolved Recency parameters below.
+The individual tier mappings are governed by PPV1-011. Combined-signal behavior, canonical human-readable wording, and Recency parameter values remain governed by PPV1-012, PPV1-017A, and the unresolved Recency parameters below.
 
 #### Not approved signals
 
@@ -250,7 +265,7 @@ The constitutional reason-code registry is:
 | `USER_PRIORITIZE` | Active Prioritize correction | PPV1-025 |
 | `USER_NOT_IMPORTANT` | Active Not Important correction | PPV1-026 |
 | `MANUAL_STAR` | Provider-verifiable Manual Star | PPV1-011 |
-| `RECENCY` | Objective temporal context | Recency parameter values |
+| `RECENCY` | Objective temporal context | Inactive unless a future Founder-approved rule defines an explanatory constitutional condition |
 
 Reason codes identify approved constitutional evidence. They shall never infer importance, urgency, confidence, or AI judgment.
 
