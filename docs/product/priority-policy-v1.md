@@ -137,10 +137,36 @@ The exact scope remains unresolved:
 
   | Missing Metadata | Deterministic Behavior | Founder Status |
   | --- | --- | --- |
-  | Received timestamp (`PPV1-004A`) | TODO (Founder Approval Required) | Pending |
+  | Candidate timestamp (`PPV1-004A`) | Retain the candidate with an Unknown temporal state; apply no temporal effect. | Approved |
   | Sender (`PPV1-004B`) | TODO (Founder Approval Required) | Pending |
   | Labels (`PPV1-004C`) | TODO (Founder Approval Required) | Pending |
   | User overrides (`PPV1-004D`) | TODO (Founder Approval Required) | Pending |
+
+### PPV1-004A — Missing candidate timestamp
+
+When an otherwise eligible candidate has no valid PPV1-003 candidate timestamp:
+
+1. **Candidate retention:** The candidate remains constitutionally eligible under PPV1-001 and PPV1-002B.
+2. **Unknown temporal state:** The candidate timestamp remains missing. No replacement timestamp may be generated, inferred, copied, or synthesized. Prohibited substitutes include:
+   - zero or epoch time;
+   - `evaluatedAt`;
+   - current time;
+   - synchronization time;
+   - local insertion time;
+   - local update time;
+   - another unrelated timestamp.
+3. **Available evidence:** All other available approved constitutional rules continue to evaluate normally. A Manual Star may still assign `REVIEW_LATER`. Future approved user corrections may still apply.
+4. **No temporal effect:** A missing candidate timestamp:
+   - produces no Recency effect;
+   - emits no `RECENCY` reason;
+   - does not promote or demote a tier;
+   - does not itself assign `NO_IMMEDIATE_SIGNALS`.
+
+   If no other applicable rule assigns a higher tier, PPV1-009 independently assigns `NO_IMMEDIATE_SIGNALS` with empty reasons.
+5. **Ordering:** PPV1-023 remains the sole authority for deterministic placement of candidates with missing timestamps. PPV1-004A shall not resolve that ordering decision.
+6. **Truthful disclosure:** A collection containing one or more candidates with missing candidate timestamps shall disclose incomplete temporal evidence through the future PPV1-035 collection envelope. PPV1-035 remains responsible for the exact field names, shape, and serialization.
+
+Tier evaluation may remain constitutionally valid when temporal evidence is incomplete. The disclosure communicates the limitation affecting temporal comparison and presentation; it does not imply that every tier result is invalid.
 
 - **PPV1-005 — Synchronization requirement:** TODO (Founder Approval Required): Define the minimum mailbox synchronization state required before an evaluation may be presented as current.
 - **PPV1-006 — Empty candidate behavior:** TODO (Founder Approval Required): Define the contract and user-facing meaning when no eligible candidates exist.
