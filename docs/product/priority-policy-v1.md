@@ -729,7 +729,22 @@ Corrections must be:
 
 The persistence and product workflow for corrections are outside the current implementation task. Policy behavior remains unresolved:
 
-- **PPV1-025 — Prioritize mapping:** TODO (Founder Approval Required): Define the exact tier and reason produced by a Prioritize override.
+- **PPV1-025 — Prioritize mapping:** Priority Policy v1 maps a verified active Prioritize correction to:
+  - `tier`: `NEEDS_ATTENTION`
+  - `reasonCode`: `USER_PRIORITIZE`
+
+  1. **Mapping:** A verified active Prioritize correction assigns `NEEDS_ATTENTION` and `USER_PRIORITIZE`.
+  2. **Meaning:** This assignment represents only explicit user intent. It shall not imply:
+     - objective importance;
+     - urgency;
+     - certainty;
+     - required action;
+     - independent constitutional evidence.
+  3. **Reason:** `USER_PRIORITIZE` becomes operative only when an active verified Prioritize correction exists. It shall not be emitted from inference, prediction, heuristics, or provider metadata.
+  4. **Interaction:** Conflict resolution remains governed by PPV1-027. Lifetime remains governed by PPV1-028. Undo remains governed by PPV1-029. Localization and canonical wording remain governed by PPV1-017A.
+  5. **Reevaluation:** PPV1-031 shall require reevaluation whenever a Prioritize correction becomes active, changes, or is removed.
+
+  `NEEDS_ATTENTION` in this case results solely from the user's explicit correction and shall not be interpreted as confirmation of any underlying constitutional signal.
 - **PPV1-026 — Not Important mapping:** TODO (Founder Approval Required): Define the exact tier and reason produced by a Not Important override.
 - **PPV1-027 — Override precedence:** TODO (Founder Approval Required): Define how each override interacts with every automated signal and tier.
 - **PPV1-028 — Override lifetime:** TODO (Founder Approval Required): Define whether corrections expire, survive archive/read changes, or remain until Undo.
