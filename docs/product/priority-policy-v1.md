@@ -745,7 +745,30 @@ The persistence and product workflow for corrections are outside the current imp
   5. **Reevaluation:** PPV1-031 shall require reevaluation whenever a Prioritize correction becomes active, changes, or is removed.
 
   `NEEDS_ATTENTION` in this case results solely from the user's explicit correction and shall not be interpreted as confirmation of any underlying constitutional signal.
-- **PPV1-026 — Not Important mapping:** TODO (Founder Approval Required): Define the exact tier and reason produced by a Not Important override.
+- **PPV1-026 — Not Important mapping:** Priority Policy v1 maps a verified active Not Important correction to:
+  - `tier`: `NO_IMMEDIATE_SIGNALS`
+  - `reasonCode`: `USER_NOT_IMPORTANT`
+
+  1. **Mapping:** A verified active Not Important correction assigns `NO_IMMEDIATE_SIGNALS` and `USER_NOT_IMPORTANT`.
+  2. **Meaning:** This assignment represents only explicit user intent. It means the user intentionally chose not to have the candidate presented in a higher attention tier while the correction is active. It shall not imply that the candidate is:
+     - objectively unimportant;
+     - irrelevant;
+     - safe to ignore;
+     - incapable of requiring human judgment;
+     - negatively classified by AI or provider metadata.
+  3. **Reason:** `USER_NOT_IMPORTANT` becomes operative only when an authoritative verified active Not Important correction exists. It shall not be emitted from:
+     - absent signals;
+     - passive metadata;
+     - inference;
+     - prediction;
+     - heuristics;
+     - provider importance;
+     - AI judgment.
+  4. **Conflict handling:** PPV1-027 remains responsible for conflicts involving Prioritize, Not Important, Manual Star, and ordinary constitutional signals. PPV1-026 approves the isolated mapping only.
+  5. **Lifecycle:** PPV1-028 remains responsible for correction lifetime. PPV1-029 remains responsible for Undo semantics. PPV1-031 shall require reevaluation whenever the correction becomes active, changes, expires, or is removed.
+  6. **Wording:** PPV1-017A remains responsible for the localization key and canonical Founder-approved English wording.
+
+  `NO_IMMEDIATE_SIGNALS` in this case results from the user's explicit correction. It does not represent absence of evidence and must remain distinguishable from the PPV1-009 default outcome through `USER_NOT_IMPORTANT`.
 - **PPV1-027 — Override precedence:** TODO (Founder Approval Required): Define how each override interacts with every automated signal and tier.
 - **PPV1-028 — Override lifetime:** TODO (Founder Approval Required): Define whether corrections expire, survive archive/read changes, or remain until Undo.
 - **PPV1-029 — Undo semantics:** TODO (Founder Approval Required): Define the state restored by Undo and whether historical correction records remain auditable.
