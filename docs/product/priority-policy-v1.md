@@ -810,7 +810,38 @@ The persistence and product workflow for corrections are outside the current imp
   8. **Lifecycle:** PPV1-028 remains responsible for when a correction is active. PPV1-029 remains responsible for Undo semantics. PPV1-031 shall require reevaluation whenever authoritative correction state changes.
 
   Verified user intent governs the final attention tier. It does not erase independently verified constitutional evidence.
-- **PPV1-028 — Override lifetime:** TODO (Founder Approval Required): Define whether corrections expire, survive archive/read changes, or remain until Undo.
+- **PPV1-028 — Override lifetime:** Priority Policy v1 adopts indefinite correction lifetime.
+
+  1. **Lifetime:** A verified active correction remains active indefinitely until the owner explicitly:
+     - performs Undo under PPV1-029; or
+     - replaces it through an authoritative atomic transition.
+  2. **No automatic expiration:** Priority Policy v1 defines no automatic expiration. The following shall not create, extend, suspend, expire, or remove a correction:
+     - new incoming messages;
+     - outgoing replies;
+     - drafts;
+     - archive;
+     - Inbox restoration;
+     - label changes;
+     - read/unread changes;
+     - provider synchronization;
+     - provider history advancement;
+     - projection updates;
+     - reevaluation;
+     - application restart;
+     - elapsed time.
+  3. **Eligibility independence:** Correction lifetime is independent of candidate eligibility. Eligibility determines only whether the correction participates in evaluation. A correction continues to exist even while its thread is temporarily outside PPV1-001 candidate scope. If the same logical thread later becomes eligible again, the existing correction applies.
+  4. **Reevaluation:** PPV1-031 may observe lifecycle changes. Reevaluation itself shall never create, extend, expire, suspend, or remove a correction.
+  5. **Future amendments:** A future policy version may introduce expiration only through explicit Founder approval defining:
+     - the triggering condition;
+     - migration behavior;
+     - treatment of existing corrections;
+     - disclosure requirements;
+     - recalculation requirements.
+
+     Implementations shall not invent expiration behavior before such approval.
+  6. **Existing authorities:** PPV1-027 continues to govern precedence while active. PPV1-029 continues to govern Undo.
+
+  Explicit user intent remains authoritative until explicit user intent changes.
 - **PPV1-029 — Undo semantics:** TODO (Founder Approval Required): Define the state restored by Undo and whether historical correction records remain auditable.
 
 ## 11. Freshness policy
