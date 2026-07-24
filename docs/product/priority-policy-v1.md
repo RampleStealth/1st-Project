@@ -610,7 +610,7 @@ Candidate ordering must be stable and fully deterministic. Database row order, p
      - does not create reasons;
      - does not alter rule precedence;
      - does not imply importance, urgency, or required action.
-  7. **Deterministic replay:** Identical constitutional candidate inputs and an identical `evaluatedAt` shall produce identical ordering once PPV1-023 is approved.
+  7. **Deterministic replay:** Identical constitutional candidate inputs and an identical `evaluatedAt` shall produce identical ordering.
 
   PPV1-024 remains responsible for excessive future-skew policy. This decision applies only the already approved age-zero treatment to the ordering comparison key and does not resolve PPV1-024's remaining behavior.
 - **PPV1-022 — Final identity tie-breaker:** Priority Policy v1 uses the immutable owner-scoped application `threadId` as the final non-semantic tie-breaker.
@@ -647,9 +647,33 @@ Candidate ordering must be stable and fully deterministic. Database row order, p
      - use database or runtime ordering.
 
   PPV1-022 exists solely to complete a deterministic total order when all higher-order constitutional comparators are equal.
-- **PPV1-023 — Missing timestamp ordering:** TODO (Founder Approval Required): Define where candidates without a valid activity timestamp appear.
+- **PPV1-023 — Missing timestamp ordering:** Priority Policy v1 requires candidates with verified PPV1-003 timestamps to appear before candidates with Unknown timestamps within the same final tier.
 
-Until these decisions are approved, an ordered multi-candidate Attention response must not be implemented.
+  1. **Tier authority:** PPV1-020 tier grouping remains the primary collection order. Timestamp availability shall never move a candidate across tiers.
+  2. **Verified temporal evidence:** Within the same final tier, candidates with valid PPV1-003 timestamps appear first. They are ordered under PPV1-021:
+     - effective candidate timestamp descending;
+     - PPV1-022 `threadId` comparator when effective timestamps are equal.
+  3. **Unknown temporal evidence:** Candidates whose PPV1-003 timestamp is Unknown appear after timestamped candidates within the same tier. Unknown-timestamp candidates are ordered solely by the PPV1-022 `threadId` comparator.
+  4. **Unknown preservation:** The implementation shall not synthesize or substitute:
+     - epoch time;
+     - current time;
+     - `evaluatedAt`;
+     - synchronization time;
+     - insertion time;
+     - local persistence time;
+     - any unrelated timestamp.
+  5. **No semantic implication:** Placement after timestamped peers shall not mean or imply that an Unknown-timestamp candidate is:
+     - older;
+     - less important;
+     - lower priority;
+     - less urgent;
+     - safe to ignore.
+
+     The placement exists only because verified chronological comparison is unavailable.
+  6. **Disclosure:** Collections containing Unknown candidate timestamps shall disclose incomplete temporal evidence through PPV1-035. The exact field names, shape, serialization, and user-facing presentation remain governed by PPV1-035 and related UX decisions.
+  7. **Future skew:** PPV1-024 remains responsible for determining whether excessively future-skewed timestamps continue to count as valid temporal evidence.
+
+  PPV1-023 completes deterministic ordering without assigning chronology to Unknown evidence.
 
 ## 9. Future timestamp handling
 
