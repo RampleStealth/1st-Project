@@ -140,7 +140,7 @@ The exact scope remains unresolved:
   | Candidate timestamp (`PPV1-004A`) | Retain the candidate with an Unknown temporal state; apply no temporal effect. | Approved |
   | Sender (`PPV1-004B`) | Preserve independent Unknown states for display name and address; apply no policy effect. | Approved |
   | Labels (`PPV1-004C`) | Preserve independent verified-present, verified-absent, or Unknown states; evaluate only rules whose required label evidence is verified. | Approved |
-  | User overrides (`PPV1-004D`) | TODO (Founder Approval Required) | Pending |
+  | User overrides (`PPV1-004D`) | Preserve verified-active-present, verified-active-absent, or Unknown state; evaluate only rules whose required override evidence is verified. | Approved |
 
 ### PPV1-004A — Missing candidate timestamp
 
@@ -216,6 +216,41 @@ Priority Policy v1 adopts independent three-state knowledge for every normalized
 8. **Recalculation:** When authoritative label metadata becomes available or changes, the candidate shall be reevaluated under the future PPV1-031 trigger rules.
 
 PPV1-004C governs policy-evidence label availability after location eligibility has otherwise been established. It does not authorize synthesis of Inbox membership or any other provider mapping.
+
+### PPV1-004D — Missing user override metadata
+
+Priority Policy v1 adopts three-state knowledge for owner-scoped user-override metadata:
+
+- verified active override present;
+- verified active override absent;
+- Unknown.
+
+1. **Verified presence:** An override is present only when a valid authoritative owner-scoped record confirms an active explicit user correction. Active corrections remain non-operative until PPV1-025 through PPV1-029 approve their mapping, precedence, lifetime, and Undo semantics.
+2. **Verified absence:** Override absence is established only when a successful authoritative owner-scoped lookup confirms that no active override exists.
+3. **Unknown state:** The following produce Unknown:
+   - failed lookup;
+   - unavailable storage;
+   - incomplete metadata;
+   - malformed metadata;
+   - ambiguous state;
+   - unverifiable activity.
+
+   Unknown shall never be interpreted as:
+
+   - no active correction;
+   - not prioritized;
+   - not marked Not Important;
+   - an inferred Undo;
+   - an empty override treated as verified absence.
+4. **Candidate retention:** Missing, unavailable, incomplete, or malformed override metadata shall not exclude an otherwise eligible candidate.
+5. **Partial evaluation:** When override state is Unknown:
+   - override-dependent rules do not evaluate;
+   - every approved override-independent rule continues to evaluate normally.
+6. **Default tier:** If no available approved rule assigns a higher tier, PPV1-009 may independently assign `NO_IMMEDIATE_SIGNALS`. That result shall not be represented as proof that no active user correction exists.
+7. **Disclosure:** Because Unknown override metadata may conceal the highest-authority constitutional input, a collection containing affected candidates shall disclose incomplete user-correction evidence through PPV1-035. PPV1-035 remains responsible for the exact public fields, shape, and serialization.
+8. **Recalculation:** When authoritative override state becomes available or changes, the candidate shall be reevaluated under PPV1-031.
+
+Tier evaluation may proceed from available evidence while override metadata is Unknown, but the result must remain truthfully qualified through collection-level disclosure.
 
 - **PPV1-005 — Synchronization requirement:** TODO (Founder Approval Required): Define the minimum mailbox synchronization state required before an evaluation may be presented as current.
 - **PPV1-006 — Empty candidate behavior:** TODO (Founder Approval Required): Define the contract and user-facing meaning when no eligible candidates exist.
