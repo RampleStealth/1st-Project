@@ -225,7 +225,7 @@ Priority Policy v1 adopts three-state knowledge for owner-scoped user-override m
 - verified active override absent;
 - Unknown.
 
-1. **Verified presence:** An override is present only when a valid authoritative owner-scoped record confirms an active explicit user correction. Active corrections remain non-operative until PPV1-025 through PPV1-029 approve their mapping, precedence, lifetime, and Undo semantics.
+1. **Verified presence:** An override is present only when a valid authoritative owner-scoped record confirms an active explicit user correction. Active corrections operate under the approved mapping, precedence, lifetime, and Undo semantics in PPV1-025 through PPV1-029.
 2. **Verified absence:** Override absence is established only when a successful authoritative owner-scoped lookup confirms that no active override exists.
 3. **Unknown state:** The following produce Unknown:
    - failed lookup;
@@ -512,7 +512,7 @@ When simultaneous reasons are emitted, they shall be returned in this constituti
 2. Manual Star
 3. Recency
 
-The applicable Active User Correction reason or reasons remain governed by the unresolved correction semantics in PPV1-025 through PPV1-029.
+The applicable Active User Correction reason or reasons are governed by PPV1-025 through PPV1-029.
 
 This ordering preserves the constitutional rule that explicit user intent outranks passive metadata.
 
@@ -521,7 +521,7 @@ This ordering preserves the constitutional rule that explicit user intent outran
 Priority Policy v1 shall retain all applicable authorized affirmative evidence reasons and all active explicit user-correction reasons, including lower-tier supporting reasons, even when another rule determines the final tier.
 
 1. **Affirmative evidence:** An authorized reason may be emitted only when its Founder-approved constitutional condition is satisfied.
-2. **Explicit corrections:** An explicit user-correction reason may be emitted only after its mapping, active-state semantics, precedence, lifetime, and undo behavior are Founder-approved. `USER_NOT_IMPORTANT` remains registered but non-operative until PPV1-026 and its dependencies are approved.
+2. **Explicit corrections:** An explicit user-correction reason may be emitted only under the approved mapping, active-state semantics, precedence, lifetime, and Undo behavior in PPV1-025 through PPV1-029. Canonical human-readable wording remains governed by PPV1-017A.
 3. **Supporting reasons:** A reason associated with a lower individually assigned tier may remain visible when a higher tier wins. Supporting reasons must not be represented as though each one independently determined the final tier.
 4. **Prohibited negative inference:** Never emit reasons inferred from absent signals or passive negative conclusions. Prohibited examples include:
    - `NOT_STARRED`
@@ -727,7 +727,7 @@ Corrections must be:
 - independent of Gmail labels;
 - applied without silently mutating Gmail.
 
-The persistence and product workflow for corrections are outside the current implementation task. Policy behavior remains unresolved:
+The persistence and product workflow for corrections are outside the current implementation task. Constitutional correction behavior is defined below:
 
 - **PPV1-025 — Prioritize mapping:** Priority Policy v1 maps a verified active Prioritize correction to:
   - `tier`: `NEEDS_ATTENTION`
@@ -765,7 +765,7 @@ The persistence and product workflow for corrections are outside the current imp
      - provider importance;
      - AI judgment.
   4. **Conflict handling:** PPV1-027 remains responsible for conflicts involving Prioritize, Not Important, Manual Star, and ordinary constitutional signals. PPV1-026 approves the isolated mapping only.
-  5. **Lifecycle:** PPV1-028 remains responsible for correction lifetime. PPV1-029 remains responsible for Undo semantics. PPV1-031 shall require reevaluation whenever the correction becomes active, changes, expires, or is removed.
+  5. **Lifecycle:** PPV1-028 remains responsible for correction lifetime. PPV1-029 remains responsible for Undo semantics. PPV1-031 shall require reevaluation whenever the correction becomes active, changes, or becomes inactive through an approved transition.
   6. **Wording:** PPV1-017A remains responsible for the localization key and canonical Founder-approved English wording.
 
   `NO_IMMEDIATE_SIGNALS` in this case results from the user's explicit correction. It does not represent absence of evidence and must remain distinguishable from the PPV1-009 default outcome through `USER_NOT_IMPORTANT`.
@@ -842,7 +842,27 @@ The persistence and product workflow for corrections are outside the current imp
   6. **Existing authorities:** PPV1-027 continues to govern precedence while active. PPV1-029 continues to govern Undo.
 
   Explicit user intent remains authoritative until explicit user intent changes.
-- **PPV1-029 — Undo semantics:** TODO (Founder Approval Required): Define the state restored by Undo and whether historical correction records remain auditable.
+- **PPV1-029 — Undo semantics:** Priority Policy v1 defines Undo as an idempotent atomic deactivation of the authoritative active correction.
+
+  1. **Target:** Undo applies only to the authoritative verified active correction for the owner-scoped thread.
+  2. **State transition:** A successful Undo transitions that correction from active to inactive or undone. The correction's immutable historical record remains preserved.
+  3. **No historical reactivation:** Undo shall not:
+     - reactivate a previous correction;
+     - restore a correction stack;
+     - restore an earlier tier result;
+     - restore a cached evaluation snapshot;
+     - infer prior user intent.
+  4. **Active-state result:** After a successful authoritative Undo:
+     - correction state becomes verified active-absent;
+     - PPV1-027 correction dominance ends;
+     - the undone correction reason is no longer emitted.
+  5. **Reevaluation:** The candidate shall be reevaluated from current constitutional evidence. Ordinary rules determine the final tier under PPV1-012 unless another authoritative active correction exists through a separate approved transition.
+  6. **Historical records:** Inactive and undone correction records remain auditable. They are historical evidence of past user actions, but they are non-operative evaluator inputs.
+  7. **Idempotency:** Repeating Undo for the same already-undone correction creates no additional constitutional effect. It shall not create duplicate history, reactivate another correction, or alter the resulting tier beyond any required deterministic reevaluation.
+  8. **Failed or ambiguous Undo:** A failed, incomplete, or ambiguous persistence transition shall not establish verified absence. Correction state remains Unknown under PPV1-004D until authoritative state is confirmed. PPV1-035 governs incomplete-correction-evidence disclosure.
+  9. **Existing authorities:** PPV1-027 governs correction precedence before Undo. PPV1-028 governs correction lifetime. PPV1-031 shall require reevaluation after a confirmed Undo transition. PPV1-041 remains responsible for user-facing correction and Undo wording.
+
+  Undo changes authority going forward. It does not rewrite history or automatically restore earlier intent.
 
 ## 11. Freshness policy
 
