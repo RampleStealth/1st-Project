@@ -86,7 +86,31 @@ The policy evaluates thread-level normalized metadata. Message bodies, snippets,
 
 The exact scope remains unresolved:
 
-- **PPV1-001 — Eligible Gmail location:** TODO (Founder Approval Required): Define whether candidates are limited to threads currently carrying the Gmail `INBOX` label and whether Spam, Trash, archived mail, Sent, and Drafts are categorically excluded.
+- **PPV1-001 — Eligible Gmail location:** Current Inbox membership defines constitutional location eligibility.
+
+  A thread is location-eligible when:
+
+  - its normalized current location includes verified Inbox membership; and
+  - it is not currently located in Spam or Trash.
+
+  Approved behavior:
+
+  - Current Inbox thread → eligible
+  - Archived thread without Inbox membership → ineligible
+  - Sent-only thread → ineligible
+  - Draft-only thread → ineligible
+  - Spam thread → ineligible
+  - Trash thread → ineligible
+  - Inbox thread that also contains sent messages → remains eligible
+  - Inbox thread that also contains a draft → remains eligible
+
+  Eligibility is determined by the thread's current normalized location membership. Sent or Draft participation within a conversation does not disqualify an otherwise eligible Inbox thread.
+
+  Priority Policy v1 does not evaluate archived-only mail, Sent-only conversations, Draft-only conversations, Spam, or Trash.
+
+  This decision governs location eligibility only. Lookback duration, candidate timestamps, missing-label handling, synchronization readiness, and provider mappings remain governed by separate Founder decisions.
+
+  The constitutional policy consumes provider-neutral normalized location membership; Gmail-specific labels remain adapter concerns.
 - **PPV1-002 — Maximum candidate count:** The policy defines no maximum candidate count. Implementations may batch, paginate, stream, parallelize, or otherwise optimize evaluation provided every eligible candidate remains eligible for deterministic evaluation.
   - **PPV1-002A — Time-to-first-result guarantee:** TODO (Founder Approval Required): Define the maximum permitted time before the first eligible deterministic result is available.
   - **PPV1-002B — Candidate lookback duration:** TODO (Founder Approval Required): Define whether candidate eligibility has a maximum lookback duration and, if so, its exact boundary semantics.
